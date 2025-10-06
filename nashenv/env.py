@@ -122,6 +122,7 @@ class NashEnv:
         # Markdown 双表
         templates.append(
             "{role}.\n\n"
+            "Rows = Player 1's actions [{p1a}, {p1b}]; Columns = Player 2's actions [{p2x}, {p2y}].\n\n"
             "### P1's payoff\n"
             "|      | {p2x} | {p2y} |\n"
             "|------|-------|-------|\n"
@@ -138,6 +139,7 @@ class NashEnv:
         # 单表(P1,P2)
         templates.append(
             "{role}.\n\n"
+            "Each cell shows (P1 payoff, P2 payoff). Rows = [{p1a}, {p1b}], Columns = [{p2x}, {p2y}].\n"
             "|      | {p2x}         | {p2y}         |\n"
             "|------|---------------|---------------|\n"
             "| {p1a} | ({A11},{B11}) | ({A12},{B12}) |\n"
@@ -148,6 +150,7 @@ class NashEnv:
         # 逐格文字
         templates.append(
             "{role}.\n\n"
+            "The payoffs for each combination of actions are as follows:\n"
             "- If P1={p1a}, P2={p2x} → (P1:{A11}, P2:{B11})\n"
             "- If P1={p1a}, P2={p2y} → (P1:{A12}, P2:{B12})\n"
             "- If P1={p1b}, P2={p2x} → (P1:{A21}, P2:{B21})\n"
@@ -155,18 +158,19 @@ class NashEnv:
             "{instr}\n"
         )
 
-        # 数组
+        # 数组（增加说明）
         templates.append(
             "{role}.\n\n"
-            "P1 payoff = [[{A11},{A12}],[{A21},{A22}]]\n"
-            "P2 payoff = [[{B11},{B12}],[{B21},{B22}]]\n\n"
+            "Rows = [{p1a}, {p1b}], Columns = [{p2x}, {p2y}].\n"
+            "P1 payoff matrix = [[{A11},{A12}],[{A21},{A22}]]\n"
+            "P2 payoff matrix = [[{B11},{B12}],[{B21},{B22}]]\n\n"
             "{instr}\n"
         )
 
         # 对话体
         templates.append(
             "{role}.\n\n"
-            "You (P1) vs Opponent (P2).\n"
+            "You (P1) vs Opponent (P2). Rows = P1's actions [{p1a}, {p1b}], Columns = P2's actions [{p2x}, {p2y}].\n"
             "P1 payoff: [[{A11},{A12}],[{A21},{A22}]]\n"
             "P2 payoff: [[{B11},{B12}],[{B21},{B22}]]\n\n"
             "{instr}\n"
@@ -175,7 +179,7 @@ class NashEnv:
         # Alice/Bob
         templates.append(
             "{role}.\n\n"
-            "Alice (P1) and Bob (P2) play a game.\n"
+            "Alice (P1) and Bob (P2) play a game. Rows = Alice's actions [{p1a}, {p1b}], Columns = Bob's actions [{p2x}, {p2y}].\n"
             "|      | {p2x}         | {p2y}         |\n"
             "|------|---------------|---------------|\n"
             "| {p1a} | ({A11},{B11}) | ({A12},{B12}) |\n"
@@ -186,7 +190,7 @@ class NashEnv:
         # 公司竞争
         templates.append(
             "{role}.\n\n"
-            "Company A (P1) and Company B (P2).\n"
+            "Company A (P1) and Company B (P2). Actions for A: [{p1a}, {p1b}], for B: [{p2x}, {p2y}].\n"
             "- ({p1a},{p2x}) = ({A11},{B11})\n"
             "- ({p1a},{p2y}) = ({A12},{B12})\n"
             "- ({p1b},{p2x}) = ({A21},{B21})\n"
@@ -197,7 +201,7 @@ class NashEnv:
         # 动物狩猎
         templates.append(
             "{role}.\n\n"
-            "Two animals choose strategies:\n"
+            "Two animals choose strategies. One is P1 (rows: [{p1a}, {p1b}]), the other is P2 (columns: [{p2x}, {p2y}]).\n"
             "|      | {p2x}         | {p2y}         |\n"
             "|------|---------------|---------------|\n"
             "| {p1a} | ({A11},{B11}) | ({A12},{B12}) |\n"
@@ -208,7 +212,7 @@ class NashEnv:
         # Q&A 
         templates.append(
             "{role}.\n\n"
-            "Q: What are the payoffs?\n"
+            "Q: What are the payoffs (Rows = P1 actions [{p1a}, {p1b}], Columns = P2 actions [{p2x}, {p2y}])?\n"
             "A: ({p1a},{p2x})=({A11},{B11}), "
             "({p1a},{p2y})=({A12},{B12}), "
             "({p1b},{p2x})=({A21},{B21}), "
@@ -219,17 +223,17 @@ class NashEnv:
         # 分步骤
         templates.append(
             "{role}.\n\n"
-            "Step 1: Observe payoff matrices\n"
-            "- P1: [[{A11},{A12}],[{A21},{A22}]]\n"
-            "- P2: [[{B11},{B12}],[{B21},{B22}]]\n"
+            "Step 1: Observe payoff matrices (Rows = P1 actions [{p1a}, {p1b}], Columns = P2 actions [{p2x}, {p2y}]).\n"
+            "- P1 payoff: [[{A11},{A12}],[{A21},{A22}]]\n"
+            "- P2 payoff: [[{B11},{B12}],[{B21},{B22}]]\n"
             "Step 2: Decide.\n\n"
             "{instr}\n"
         )
 
-        #  极简
+        # 极简
         templates.append(
             "{role}.\n\n"
-            "Game:\n"
+            "Game (Rows = P1 actions [{p1a}, {p1b}], Columns = P2 actions [{p2x}, {p2y}]):\n"
             "A = [[{A11},{A12}],[{A21},{A22}]]\n"
             "B = [[{B11},{B12}],[{B21},{B22}]]\n\n"
             "{instr}\n"
@@ -238,7 +242,7 @@ class NashEnv:
         # 强调完全信息
         templates.append(
             "{role}.\n\n"
-            "This is a complete-information 2x2 game.\n"
+            "This is a complete-information 2x2 game. Rows = [{p1a}, {p1b}], Columns = [{p2x}, {p2y}].\n"
             "|      | {p2x}         | {p2y}         |\n"
             "|------|---------------|---------------|\n"
             "| {p1a} | ({A11},{B11}) | ({A12},{B12}) |\n"
@@ -274,7 +278,6 @@ class NashEnv:
         )
 
 
-# 本地演示
 if __name__ == "__main__":
     from .config import NashEnvConfig
     cfg = NashEnvConfig(game="PD")
