@@ -1,119 +1,294 @@
-import gymnasium as gym
+# nashenv/env.py
+from __future__ import annotations
+from typing import Dict, Any, Tuple, List, Optional
 import numpy as np
-from ragen.env.base import BaseDiscreteActionEnv
+import nashpy as nash  
 from .config import NashEnvConfig
 
-INIT_PROMPT = """You are playing a 2-action matrix game. Goal: choose a Nash equilibrium action.
-Rules:
-1) There are 2 actions: {name_a} and {name_b}
-2) Payoff matrices for both players are hidden.
-3) Your task is to choose an action that belongs to a Nash equilibrium.
-"""
 
-class NashEnv(BaseDiscreteActionEnv, gym.Env):
+class NashEnv:
     """
-    NashEnv：接口完全对齐 bandit
-    - reset(seed) -> obs(str)
-    - step(action) -> (obs: str, reward: int, done: bool, info: dict)
-    - render() -> str
-    - close() -> None
+    完全信息 2x2 矩阵博弈环境（接口与 bandit 对齐）
+      - reset(seed) -> str
+      - step(action) -> (str, reward, done, info)
+      - render() -> str
     """
 
-    def __init__(self, config=None):
-        BaseDiscreteActionEnv.__init__(self)
-        self.config = config if config is not None else NashEnvConfig()
+    metadata = {"render.modes": ["human"]}
 
-        # 与 bandit 一致：两个动作，索引从 action_space_start 开始
-        self.ACTION_SPACE = gym.spaces.discrete.Discrete(2, start=self.config.action_space_start)
+    def __init__(self, config: Optional[NashEnvConfig] = None):
+        self.config = config or NashEnvConfig()
+        self.np_random: Optional[np.random.RandomState] = None
 
-        self.lo_action_name = self.config.lo_action_name
-        self.hi_action_name = self.config.hi_action_name
+        # payoff matrices
+        self.A: Optional[Tuple[Tuple[int, int], Tuple[int, int]]] = None  # P1 payoff
+        self.B: Optional[Tuple[Tuple[int, int], Tuple[int, int]]] = None  # P2 payoff
 
-        # payoff 矩阵（若未指定，给个默认博弈）
-        if self.config.payoff_matrix_p1 is None:
-            self.config.payoff_matrix_p1 = [[1, 0], [0, 1]]  # 协调博弈
-        if self.config.payoff_matrix_p2 is None:
-            self.config.payoff_matrix_p2 = [[1, 0], [0, 1]]
+        # runtime state
+        self.role: str = "P1"
+        self.variant_idx: int = 0
+        self.last_prompt: str = ""
+        self._done: bool = False
+        self.valid_actions: List[int] = [1, 2]
+        self.templates = self._build_templates()
 
-        self.render_cache = None
-        assert self.config.render_mode == "text"
+    #bandit接口 
+    def reset(self, seed: Optional[int] = None) -> str:
+        if seed is not None:
+            self.np_random = np.random.RandomState(seed)
+        elif self.np_random is None:
+            self.np_random = np.random.RandomState(0)
+        self._done = False
 
-    def _randomize_actions(self):
-        start = self.config.action_space_start
-        if self.np_random.random() < 0.5:
-            self.ACTION_LOOKUP = {
-                start: self.lo_action_name,
-                start + 1: self.hi_action_name,
-            }
+        # payoff matrices 来自 config
+        self.A, self.B = self.config.get_payoff_matrices()
+
+        self.variant_idx = int(self.np_random.randint(0, len(self.templates)))
+        if self.config.force_role in ("P1", "P2"):
+            self.role = self.config.force_role
         else:
-            self.ACTION_LOOKUP = {
-                start: self.hi_action_name,
-                start + 1: self.lo_action_name,
-            }
-        self.ARM_IDX_TO_NAME = dict(self.ACTION_LOOKUP)
-        self.NAME_TO_ARM_IDX = {v: k for k, v in self.ARM_IDX_TO_NAME.items()}
-        self.config.action_lookup = dict(self.ACTION_LOOKUP)
+            self.role = "P1" if int(self.np_random.randint(0, 2)) == 0 else "P2"
+        self.last_prompt = self._render_prompt()
+        return self.last_prompt
 
-    def _find_nash_equilibria(self):
-        """返回玩家1的所有纯策略纳什均衡索引"""
-        nash_actions = []
-        payoff1 = np.array(self.config.payoff_matrix_p1)
-        payoff2 = np.array(self.config.payoff_matrix_p2)
+    def step(self, action: int) -> Tuple[str, int, bool, Dict[str, Any]]:
+        """根据 nashpy计算NE给reward"""
+        if self._done:
+            info = dict(
+                action_is_valid=False,
+                action_is_effective=False,
+                success=False,
+                reason="episode_already_done",
+            )
+            return self.last_prompt, 0, True, info
 
-        for a1 in range(2):  # 玩家1动作
-            for a2 in range(2):  # 玩家2动作
-                # 玩家1是否最佳回应
-                best_resp1 = payoff1[:, a2].max()
-                cond1 = payoff1[a1, a2] == best_resp1
-                # 玩家2是否最佳回应
-                best_resp2 = payoff2[a1, :].max()
-                cond2 = payoff2[a1, a2] == best_resp2
-                if cond1 and cond2:
-                    nash_actions.append(a1)
-        return nash_actions
+        is_valid = action in self.valid_actions
+        if not is_valid:
+            info = dict(
+                action_is_valid=False,
+                action_is_effective=False,
+                success=False,
+                reason="invalid_action",
+            )
+            self._done = True
+            return self.last_prompt, 0, True, info
+        game = nash.Game(np.array(self.A), np.array(self.B))
+        NE = self._pure_nash_equilibria()  # [(row, col), ...]
 
-    def reset(self, seed=None, mode=None):
-        gym.Env.reset(self, seed=seed)
-        self._randomize_actions()
+        idx = action - 1
+        success = False
+        if self.role == "P1":
+            success = any(r == idx for (r, c) in NE)
+        else:  # P2
+            success = any(c == idx for (r, c) in NE)
 
-        pos1 = self.config.action_space_start
-        pos2 = pos1 + 1
-        name1 = self.ARM_IDX_TO_NAME[pos1]
-        name2 = self.ARM_IDX_TO_NAME[pos2]
+        reward = 1 if success else 0
 
-        self.nash_actions = self._find_nash_equilibria()
+        self._done = True
 
-        self.render_cache = INIT_PROMPT.format(name_a=name1, name_b=name2)
-        return self.render_cache  
-
-    def compute_reward(self, action: int) -> int:
-        # 判定玩家1动作是否属于纳什均衡
-        # 将索引映射回 {0,1}
-        logical_idx = action - self.config.action_space_start
-        return int(logical_idx in self.nash_actions)
-
-    def step(self, action: int):
-        assert action in self.ACTION_LOOKUP, f"Invalid action: {action}"
-
-        reward = self.compute_reward(action)
-        action_name = self.ARM_IDX_TO_NAME[action]
-
-        next_obs = f"{action_name}: {reward} points"
-        self.render_cache = next_obs
-
-        done = True
-        info = {
-            "action_is_effective": True, 
+        info: Dict[str, Any] = {
             "action_is_valid": True,
-            "success": bool(reward == 1),  # 这里表示是否选中纳什均衡
+            "action_is_effective": success,
+            "success": success,
+            "role": self.role,
+            "NE": [(int(r), int(c)) for (r, c) in NE],
         }
-        return next_obs, reward, done, info
+        return self.last_prompt, reward, True, info
 
-    def get_all_actions(self):
-        return [self.ACTION_SPACE.start, self.ACTION_SPACE.start + 1]
-
-    def render(self):
-        return self.render_cache
+    def render(self) -> str:
+        return self.last_prompt
 
     def close(self):
-        self.render_cache = None
+        pass
+
+    #内部函数
+    #版本问题，手写用is_best_response 代替game.pure_nash_equilibria()判断纯策略纳什均衡
+    def _pure_nash_equilibria(self) -> List[Tuple[int, int]]:
+        game = nash.Game(np.array(self.A), np.array(self.B))
+        NE = []
+        for i in [0, 1]:   # P1 行
+            for j in [0, 1]:  # P2 列
+                row_strategy = np.zeros(2); row_strategy[i] = 1
+                col_strategy = np.zeros(2); col_strategy[j] = 1
+                is_row_best, is_col_best = game.is_best_response(row_strategy, col_strategy)
+                if is_row_best and is_col_best:
+                    NE.append((i, j))
+        return NE
+
+    #构建prompt，12种
+    def _build_templates(self) -> List[str]:
+        templates: List[str] = []
+
+        # Markdown 双表
+        templates.append(
+            "{role}.\n\n"
+            "### P1's payoff\n"
+            "|      | {p2x} | {p2y} |\n"
+            "|------|-------|-------|\n"
+            "| {p1a} | {A11} | {A12} |\n"
+            "| {p1b} | {A21} | {A22} |\n\n"
+            "### P2's payoff\n"
+            "|      | {p2x} | {p2y} |\n"
+            "|------|-------|-------|\n"
+            "| {p1a} | {B11} | {B12} |\n"
+            "| {p1b} | {B21} | {B22} |\n\n"
+            "{instr}\n"
+        )
+
+        # 单表(P1,P2)
+        templates.append(
+            "{role}.\n\n"
+            "|      | {p2x}         | {p2y}         |\n"
+            "|------|---------------|---------------|\n"
+            "| {p1a} | ({A11},{B11}) | ({A12},{B12}) |\n"
+            "| {p1b} | ({A21},{B21}) | ({A22},{B22}) |\n\n"
+            "{instr}\n"
+        )
+
+        # 逐格文字
+        templates.append(
+            "{role}.\n\n"
+            "- If P1={p1a}, P2={p2x} → (P1:{A11}, P2:{B11})\n"
+            "- If P1={p1a}, P2={p2y} → (P1:{A12}, P2:{B12})\n"
+            "- If P1={p1b}, P2={p2x} → (P1:{A21}, P2:{B21})\n"
+            "- If P1={p1b}, P2={p2y} → (P1:{A22}, P2:{B22})\n\n"
+            "{instr}\n"
+        )
+
+        # 数组
+        templates.append(
+            "{role}.\n\n"
+            "P1 payoff = [[{A11},{A12}],[{A21},{A22}]]\n"
+            "P2 payoff = [[{B11},{B12}],[{B21},{B22}]]\n\n"
+            "{instr}\n"
+        )
+
+        # 对话体
+        templates.append(
+            "{role}.\n\n"
+            "You (P1) vs Opponent (P2).\n"
+            "P1 payoff: [[{A11},{A12}],[{A21},{A22}]]\n"
+            "P2 payoff: [[{B11},{B12}],[{B21},{B22}]]\n\n"
+            "{instr}\n"
+        )
+
+        # Alice/Bob
+        templates.append(
+            "{role}.\n\n"
+            "Alice (P1) and Bob (P2) play a game.\n"
+            "|      | {p2x}         | {p2y}         |\n"
+            "|------|---------------|---------------|\n"
+            "| {p1a} | ({A11},{B11}) | ({A12},{B12}) |\n"
+            "| {p1b} | ({A21},{B21}) | ({A22},{B22}) |\n\n"
+            "{instr}\n"
+        )
+
+        # 公司竞争
+        templates.append(
+            "{role}.\n\n"
+            "Company A (P1) and Company B (P2).\n"
+            "- ({p1a},{p2x}) = ({A11},{B11})\n"
+            "- ({p1a},{p2y}) = ({A12},{B12})\n"
+            "- ({p1b},{p2x}) = ({A21},{B21})\n"
+            "- ({p1b},{p2y}) = ({A22},{B22})\n\n"
+            "{instr}\n"
+        )
+
+        # 动物狩猎
+        templates.append(
+            "{role}.\n\n"
+            "Two animals choose strategies:\n"
+            "|      | {p2x}         | {p2y}         |\n"
+            "|------|---------------|---------------|\n"
+            "| {p1a} | ({A11},{B11}) | ({A12},{B12}) |\n"
+            "| {p1b} | ({A21},{B21}) | ({A22},{B22}) |\n\n"
+            "{instr}\n"
+        )
+
+        # Q&A 
+        templates.append(
+            "{role}.\n\n"
+            "Q: What are the payoffs?\n"
+            "A: ({p1a},{p2x})=({A11},{B11}), "
+            "({p1a},{p2y})=({A12},{B12}), "
+            "({p1b},{p2x})=({A21},{B21}), "
+            "({p1b},{p2y})=({A22},{B22}).\n\n"
+            "{instr}\n"
+        )
+
+        # 分步骤
+        templates.append(
+            "{role}.\n\n"
+            "Step 1: Observe payoff matrices\n"
+            "- P1: [[{A11},{A12}],[{A21},{A22}]]\n"
+            "- P2: [[{B11},{B12}],[{B21},{B22}]]\n"
+            "Step 2: Decide.\n\n"
+            "{instr}\n"
+        )
+
+        #  极简
+        templates.append(
+            "{role}.\n\n"
+            "Game:\n"
+            "A = [[{A11},{A12}],[{A21},{A22}]]\n"
+            "B = [[{B11},{B12}],[{B21},{B22}]]\n\n"
+            "{instr}\n"
+        )
+
+        # 强调完全信息
+        templates.append(
+            "{role}.\n\n"
+            "This is a complete-information 2x2 game.\n"
+            "|      | {p2x}         | {p2y}         |\n"
+            "|------|---------------|---------------|\n"
+            "| {p1a} | ({A11},{B11}) | ({A12},{B12}) |\n"
+            "| {p1b} | ({A21},{B21}) | ({A22},{B22}) |\n\n"
+            "{instr}\n"
+        )
+
+        return templates
+
+    def _render_prompt(self) -> str:
+        p1a, p1b = self.config.action_labels_p1
+        p2x, p2y = self.config.action_labels_p2
+        A11, A12 = self.A[0]
+        A21, A22 = self.A[1]
+        B11, B12 = self.B[0]
+        B21, B22 = self.B[1]
+
+        role_sent = "You are Player 1 (P1)" if self.role == "P1" else "You are Player 2 (P2)"
+
+        instr = (
+            f"Choose your action:\n"
+            f"- Enter 1 to select {p1a if self.role=='P1' else p2x}\n"
+            f"- Enter 2 to select {p1b if self.role=='P1' else p2y}"
+        )
+
+        template = self.templates[self.variant_idx]
+        return template.format(
+            role=role_sent,
+            p1a=p1a, p1b=p1b, p2x=p2x, p2y=p2y,
+            A11=A11, A12=A12, A21=A21, A22=A22,
+            B11=B11, B12=B12, B21=B21, B22=B22,
+            instr=instr,
+        )
+
+
+# 本地演示
+if __name__ == "__main__":
+    from .config import NashEnvConfig
+    cfg = NashEnvConfig(game="PD")
+    env = NashEnv(cfg)
+
+    print("RESET (seed=42)")
+    obs = env.reset(seed=42)
+    print(obs)
+
+    print("STEP (action=2)")
+    obs2, reward, done, info = env.step(2)
+    print("reward:", reward, "done:", done)
+    print("NE:", info["NE"])
+    print("success:", info["success"])
+
+    print("RENDER")
+    print(env.render())
