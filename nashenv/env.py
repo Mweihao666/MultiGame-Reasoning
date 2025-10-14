@@ -3,21 +3,28 @@ from __future__ import annotations
 from typing import Dict, Any, Tuple, List, Optional
 import numpy as np
 import nashpy as nash  
+import random
+import gymnasium as gym
 from .config import NashEnvConfig
+from ragen.env.base import BaseLanguageBasedEnv, seed_everything, timed
 
 
-class NashEnv:
+class NashEnv(BaseLanguageBasedEnv, gym.Env):
     """
     完全信息 2x2 矩阵博弈环境（接口与 bandit 对齐）
       - reset(seed) -> str
       - step(action) -> (str, reward, done, info)
       - render() -> str
     """
-
     metadata = {"render.modes": ["human"]}
 
     def __init__(self, config: Optional[NashEnvConfig] = None):
+        BaseLanguageBasedEnv.__init__(self) 
         self.config = config or NashEnvConfig()
+        self.render_cache = None
+        self.seed = int(self.config.seed)
+        self.render_mode = self.config.render_mode
+        assert self.render_mode == 'text'
         self.np_random: Optional[np.random.RandomState] = None
 
         # payoff matrices
@@ -29,19 +36,26 @@ class NashEnv:
         self.variant_idx: int = 0
         self.last_prompt: str = ""
         self._done: bool = False
-        self.valid_actions: List[int] = [1, 2]
+        self.valid_actions: List[str] = ['1', '2']
         self.templates = self._build_templates()
+        self.history = []
+
+        self.reset(self.seed)
 
     #bandit接口 
-    def reset(self, seed: Optional[int] = None) -> str:
+    def reset(self, seed: Optional[int] = None, **kwargs) -> str:
         if seed is not None:
             self.np_random = np.random.RandomState(seed)
+            seed_everything(seed)
         elif self.np_random is None:
             self.np_random = np.random.RandomState(0)
+            seed_everything(0)
         self._done = False
 
-        # payoff matrices 来自 config
-        self.A, self.B = self.config.get_payoff_matrices()
+        # payoff matrices 来自 config——随机选取游戏，对应修改config的setting
+        games = ["PD", "SH", "MP"]
+        game = self.np_random.choice(games)
+        self.A, self.B = self.config.get_payoff_matrices(game)
 
         self.variant_idx = int(self.np_random.randint(0, len(self.templates)))
         if self.config.force_role in ("P1", "P2"):
@@ -51,30 +65,30 @@ class NashEnv:
         self.last_prompt = self._render_prompt()
         return self.last_prompt
 
-    def step(self, action: int) -> Tuple[str, int, bool, Dict[str, Any]]:
+    def step(self, action: str) -> Tuple[str, int, bool, Dict[str, Any]]:
         """根据 nashpy计算NE给reward"""
-        if self._done:
-            info = dict(
-                action_is_valid=False,
-                action_is_effective=False,
-                success=False,
-                reason="episode_already_done",
-            )
-            return self.last_prompt, 0, True, info
-
+        # if self._done:
+        #     info = dict(
+        #         action_is_valid=False,
+        #         action_is_effective=False,
+        #         success=False,
+        #         reason="episode_already_done",
+        #     )
+        #     return self.last_prompt, 0, True, info
+        self.history.append(action)
         is_valid = action in self.valid_actions
+        # print(type(action), self.valid_actions)
         if not is_valid:
             info = dict(
                 action_is_valid=False,
                 action_is_effective=False,
                 success=False,
-                reason="invalid_action",
             )
             self._done = True
             return self.last_prompt, 0, True, info
         game = nash.Game(np.array(self.A), np.array(self.B))
         NE = self._pure_nash_equilibria()  # [(row, col), ...]
-
+        action = int(action)
         idx = action - 1
         success = False
         if self.role == "P1":
@@ -90,8 +104,6 @@ class NashEnv:
             "action_is_valid": True,
             "action_is_effective": success,
             "success": success,
-            "role": self.role,
-            "NE": [(int(r), int(c)) for (r, c) in NE],
         }
         return self.last_prompt, reward, True, info
 
@@ -280,18 +292,25 @@ class NashEnv:
 
 if __name__ == "__main__":
     from .config import NashEnvConfig
-    cfg = NashEnvConfig(game="PD")
+    cfg = NashEnvConfig()
     env = NashEnv(cfg)
+    while 1:
+        obs = env.reset(seed=random.randint(0, 1000))
+        print(obs)
+        action = input("Enter action: ")
+        if action == 'q':
+            break
+        obs, reward, done, info = env.step(action)
+        print("reward:", reward, "done:", done)
+        print(info)
 
-    print("RESET (seed=42)")
-    obs = env.reset(seed=42)
-    print(obs)
+    # print(obs)
 
-    print("STEP (action=2)")
-    obs2, reward, done, info = env.step(2)
-    print("reward:", reward, "done:", done)
-    print("NE:", info["NE"])
-    print("success:", info["success"])
+    # print("STEP (action=2)")
+    # obs2, reward, done, info = env.step(2)
+    # print("reward:", reward, "done:", done)
+    # print("NE:", info["NE"])
+    # print("success:", info["success"])
 
-    print("RENDER")
-    print(env.render())
+    # print("RENDER")
+    # print(env.render())
