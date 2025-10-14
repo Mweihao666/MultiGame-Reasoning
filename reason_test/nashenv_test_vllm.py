@@ -37,12 +37,12 @@ client = OpenAI(
 
 def reformat_prompt(prompt0):
     # Append fixed instruction suffix (no chat template, plain concatenation)
-    # Note: Avoid mentioning "Nash equilibrium" to test implicit reasoning
-    # Balanced version: clear format + strategic hint
+    # Guide model to analyze payoffs without mentioning "Nash equilibrium"
     prompt = prompt0 + (
-        "\n\nConsider what rational players would do. "
+        "\n\nAnalyze the payoff matrix carefully. Consider what each player would choose "
+        "to maximize their own payoff, and select your best action accordingly.\n\n"
         "Let's think step by step and always output: "
-        "<think> [your reasoning] </think> <answer> [1 or 2] </answer> "
+        "<think> [Your thoughts] </think> <answer> [your action: 1 or 2] </answer> "
         "with no extra text. Strictly follow this format."
     )
     return prompt
@@ -151,37 +151,6 @@ if __name__ == '__main__':
     counter = Counter(info_list)
     total = len(info_list)
     
-    # Analyze by game type
-    game_stats = {}
-    role_stats = {'P1': {'success': 0, 'total': 0}, 'P2': {'success': 0, 'total': 0}}
-    for detail in run_details:
-        if 'NE' not in detail or detail.get('status') == 'invalid-format':
-            continue
-        
-        # Infer game type from NE
-        ne = detail['NE']
-        if len(ne) == 1:
-            game_type = 'PD'  # 囚徒困境：唯一纳什均衡
-        elif len(ne) == 2:
-            game_type = 'SH'  # 猎鹿博弈：两个纳什均衡
-        elif len(ne) == 0:
-            game_type = 'MP'  # 配对硬币：无纯策略纳什均衡
-        else:
-            game_type = 'Other'
-        
-        if game_type not in game_stats:
-            game_stats[game_type] = {'total': 0, 'success': 0}
-        game_stats[game_type]['total'] += 1
-        if detail['status'] == 'success':
-            game_stats[game_type]['success'] += 1
-        
-        # Role stats
-        role = detail.get('role', 'Unknown')
-        if role in role_stats:
-            role_stats[role]['total'] += 1
-            if detail['status'] == 'success':
-                role_stats[role]['success'] += 1
-    
     # Print summary
     print("\n" + "="*50)
     print(f"NashEnv Test Results (n={total})")
@@ -191,22 +160,6 @@ if __name__ == '__main__':
     
     success_count = counter.get('success', 0)
     print(f"\nSuccess rate: {success_count / total:.2%}")
-    
-    # Print by game type
-    print("\n【By Game Type】")
-    for game_type in ['PD', 'SH', 'MP', 'Other']:
-        if game_type in game_stats:
-            stats = game_stats[game_type]
-            rate = stats['success'] / stats['total'] * 100 if stats['total'] > 0 else 0
-            print(f"  {game_type}: {stats['success']}/{stats['total']} ({rate:.1f}%)")
-    
-    # Print by role
-    print("\n【By Role】")
-    for role in ['P1', 'P2']:
-        stats = role_stats[role]
-        rate = stats['success'] / stats['total'] * 100 if stats['total'] > 0 else 0
-        print(f"  {role}: {stats['success']}/{stats['total']} ({rate:.1f}%)")
-    
     print("="*50)
     
     # Save results to log file
@@ -219,23 +172,7 @@ if __name__ == '__main__':
         for key, value in counter.items():
             f.write(f"  {key}: {value} ({value / total:.2%})\n")
         f.write(f"Success rate: {success_count / total:.2%}\n")
-        
-        # Save game type breakdown
-        f.write("\nBy Game Type:\n")
-        for game_type in ['PD', 'SH', 'MP']:
-            if game_type in game_stats:
-                stats = game_stats[game_type]
-                rate = stats['success'] / stats['total'] * 100 if stats['total'] > 0 else 0
-                f.write(f"  {game_type}: {stats['success']}/{stats['total']} ({rate:.1f}%)\n")
-        
-        # Save role breakdown
-        f.write("\nBy Role:\n")
-        for role in ['P1', 'P2']:
-            stats = role_stats[role]
-            rate = stats['success'] / stats['total'] * 100 if stats['total'] > 0 else 0
-            f.write(f"  {role}: {stats['success']}/{stats['total']} ({rate:.1f}%)\n")
-        
-        f.write(f"\nPort: {port}\n\n")
+        f.write(f"Port: {port}\n\n")
     
     # Save detailed run info
     with open('reason_test/nashenv-last-run.jsonl', 'w') as f:
