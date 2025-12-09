@@ -1,0 +1,28 @@
+defaults:
+  - base
+
+trainer:
+  experiment_name: undercover
+  save_freq: 10
+
+actor_rollout_ref:
+  rollout:
+    max_model_len: 8000 
+es_manager:  # 数值沿用原始设定，并没有缩小规模
+  format_penalty: -0.1
+  train:
+    env_groups: 8 # 缩小规模，缩短训练所需时间
+    # under the same group, the env config and env seed are ensured to be equal
+    group_size: 16  # 16
+    env_configs:
+      tags: ["Undercover"]
+      n_groups: [8] # If not set, all env names divide nums equally. Under the same group, the env config and env seed (prompt) are equal in each generation
+  val:
+    env_groups: 8 # 256 -> 32
+    group_size: 1 # should be set to 1 because when val temperature is set to 0 and group size > 1, there will be repetitive prompts which leads to same trajectory.
+    env_configs:
+      tags: ["Undercover"]
+      n_groups: [8] # [256] -> [32] # TODO: If not set, all env names divide nums equally. Under the same group, the env config and env seed (prompt) are equal in each generation
+
+agent_proxy:
+  max_turn: 3 # 最多进行三轮，两次发言一次投票

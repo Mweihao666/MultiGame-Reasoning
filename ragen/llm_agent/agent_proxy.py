@@ -147,15 +147,19 @@ class LLMAgentProxy:
 
 		for i in range(self.config.agent_proxy.max_turn):
 			lm_inputs: DataProto = ctx_manager.get_lm_inputs(env_outputs, prepare_for_update=False)
-			lm_inputs.meta_info = dataproto.meta_info # TODO: setup vllm early stop when max length is reached. make sure this can be done
+			lm_inputs.meta_info = dataproto.meta_info 
+			# TODO: setup vllm early stop when max length is reached. make sure this can be done
 			lm_outputs: DataProto = self.generate_sequences(lm_inputs)
+			# parse llm outputs -- so no need to parse action in the env
 			env_inputs: List[Dict] = ctx_manager.get_env_inputs(lm_outputs)
+			# print(env_inputs)
 			env_outputs: List[Dict] = es_manager.step(env_inputs)
 			if len(env_outputs) == 0: # all finished
 				break
+		# 打包所有环境的最终结果
 		rollout_states = es_manager.get_rollout_states() 
+		# 前面记录了训练的信息，最后在这里打包历史结果
 		rollouts = ctx_manager.formulate_rollouts(rollout_states)
-		# self.tokenizer.batch_decode(rollouts.batch['input_ids'], skip_special_tokens=False) # see all the trajectories
 		return rollouts
 
 @hydra.main(version_base=None, config_path="../../config", config_name="base")

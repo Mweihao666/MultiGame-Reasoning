@@ -4,10 +4,13 @@ import re
 
 from openai import NotFoundError
 
-from ragen.env.base import BaseDiscreteActionEnv, EnvPlayer, seed_everything, timed
+from ragen.env.base import BaseDiscreteActionEnv, EnvPlayer, seed_everything, timed, MultiGameEnv, Simplifier
+from ragen.env.env_factory import create_env_player_for_config
 from .config import TicTacToeEnvConfig
 import gymnasium as gym
 import random
+
+import os
 
 
 system_prompt = "You are an expert in playing the Game TicTacToe."
@@ -24,11 +27,12 @@ INIT_PROMPT = f"""
 
 **How to Play**:
 1. The game is played on a {TicTacToeEnvConfig().rows}x{TicTacToeEnvConfig().cols} vertical grid.
-2. Players take turns dropping one of their pieces into any available column from the top.
-3. The piece falls to the lowest unoccupied slot in that column.
+2. Players take turns setting one of their pieces into any available slot.
+"""
 
+WIN_PROMPT = f"""
 **Winning Conditions**:
-The game ends when a player forms a line of {TicTacToeEnvConfig().win_condition} of their own pieces. The line can be:
+The game ends when a player forms a line of 3 of their own pieces. The line can be:
 
 1.  **Horizontal** (side-by-side in a row)
     *Example of a horizontal win for Player 1 ('O'):*
@@ -87,14 +91,32 @@ class TicTacToeEnv(BaseDiscreteActionEnv, gym.Env):
         self.render_cache = None
         self.render_mode = self.config.render_mode
         assert self.render_mode == 'text'
+        # 加载多样的init_prompts
+        self.init_prompts = self.config.init_prompts
         self.max_env_try = self.config.max_env_try
-        self.env_player = EnvPlayer(self.config.player_num, self.config.player_info, temperature=self.config.temperature)
+        self.env_player = create_env_player_for_config(self.config)
+        # 不打印了，会并行生成大量输出，删除
+        # print(f'[Environment TicTacToe]: set Env Player {self.config.player_info}')
         self.env_id = None
         self.current_player_id = None
         self.history = []
         self.game_state = np.zeros((self.rows, self.cols), dtype=int)
         self.last_move: Optional[tuple[int, int]] = None
-        self.reset()
+        self.reset(self.seed)
+
+    def reset0(self, seed=None):
+        # 用于测试环境，初始全0，随机选取先后手
+        seed_everything(seed)
+        self.game_state = np.zeros((self.rows, self.cols), dtype=int)
+        self.env_id = random.choice([0, 1])
+        if self.env_id == 0:
+            action = random.choice(self.get_all_actions())
+            self._update_state(action, 0)
+            self.history.append({
+                "player": 0,
+                "action": action
+            })
+        self.current_player_id = 1 - self.env_id
 
     def reset(self, seed=None, **kwargs):
         """Initializes the board as a 3x3 grid of zeros."""
@@ -132,22 +154,26 @@ class TicTacToeEnv(BaseDiscreteActionEnv, gym.Env):
         player = f'Player {self.current_player_id + 1}'
         state_prompt = self._get_state_prompt()
         actions = self.get_all_actions()
-        prompt = f"""You are {player} playing game Tic-Tac-Toe.
-
-## Rules
-{INIT_PROMPT}
-
+        # 随机添加初始描述
+        init_prompt = random.choice(self.init_prompts)
+        # 随机添加终局描述文本
+        if random.choice([0, 1]):
+            init_prompt += WIN_PROMPT
+        prompt0 = f"""You are {player} playing game Tic-Tac-Toe.
+{init_prompt}
 ## Current Game State
 {state_prompt}
 
 ## Your Turn
 You are {player}.
 The available actions are: {actions}.
-
-Please choose your action and provide your response by enclosing your choice in <s></s> tags.
-Reply with a SINGLE LINE with <s>{actions[0]}</s> and reasons with no more than 20 words.
-For example: <s>{actions[0]}</s> reason: <NO MORE THAN 20 WORDS>
 """
+        # init_prompt在trainer中已经作为env_instruct指定，不需要再次重复输入
+        if self.current_player_id == self.env_id:
+            # 初始指令已经包含在prompt中
+            prompt = prompt0 + f"""Always output: <answer> [your answer] </answer> with no extra text. Strictly follow this format. Max response length: 200 words (tokens)."""
+        else:
+             prompt = prompt0 
         return prompt
 
     def step(self, action: str) -> Tuple[str, float, bool, Dict]:
@@ -162,17 +188,23 @@ For example: <s>{actions[0]}</s> reason: <NO MORE THAN 20 WORDS>
             observation: updated game prompt;
             info: dictionary
         """
-        action = self._parse_action(action)
+        # 实际上模型调用的时候会生成format prompt，也会初步提取action信息，这里不需要模板匹配问题
+        action = self._parse_action_trainer(action)
         available_actions = self.get_all_actions()
         info = {"action_is_effective": None, "action_is_valid": None, "success": None}
         train_id = 1 - self.env_id
+        self.current_player_id = train_id
         if action not in available_actions:
             # Handle invalid action - could return an error message, or penalize.
-            error_prompt = f"Invalid action: '{action}'. \nGame over."
+            # 和invalid action相同的处理方案，更新，允许模型再次尝试
+            error_prompt = f"Invalid action: '{action}'. \nPlease try again.\n"
             info['action_is_effective'] = False
             info['action_is_valid'] = False
             info['success'] = False
-            return (error_prompt, -1, True, info)
+            info['reward'] = -0.1
+            prompt0 = error_prompt + self.render()
+            # invalid action，动作reward同样设置为format_penalty -0.1
+            return (prompt0, -0.1, False, info)
         
         # Update state with the valid action
         self._update_state(action, train_id)
@@ -188,22 +220,24 @@ For example: <s>{actions[0]}</s> reason: <NO MORE THAN 20 WORDS>
         if win:
             # self.winner = self._get_winner()
             # if self.winner == self.players[self.current_player_index]:
-            reward = 1 # Simple reward: 1 for winning, 0 for draw/loss
+            reward = 1 # Simple reward: 1 for winning, 0.5 for draw/loss
             done = True
             success_prompt = 'Congratulations! You are the winner!'
             info['action_is_effective'] = True
             info['action_is_valid'] = True
             info['success'] = True
+            info['reward'] = reward
             self.reset()
             return success_prompt, reward, done, info
         # 判断是否为平局
         if len(self.get_all_actions()) == 0:
-            reward = 0
+            reward = 0.5
             done = True
             draw_prompt = 'Draw! No winner.'
             info['action_is_effective'] = True
             info['action_is_valid'] = True
             info['success'] = False
+            info['reward'] = reward
             self.reset()
             return draw_prompt, reward, done, info
         
@@ -211,29 +245,39 @@ For example: <s>{actions[0]}</s> reason: <NO MORE THAN 20 WORDS>
         # 环境agent采取行动
         self.current_player_id = self.env_id
         env_prompt = self.render()
-        # print(env_prompt)
         valid = False
         try_count = 0
+        action_in = False
         while not valid and try_count < self.max_env_try:
             env_output = self.env_player.act(env_prompt, 0)
             # 同样处理action、更新环境的流程
-            # 看一下deepseek输出的是什么东西？是否长篇大论
+            # 看一下对手输出的是什么东西？是否长篇大论
             # print(env_output)
-            action = self._parse_action(env_output)
+            # 降低env_output的匹配精确度，环境agent并不需要精确匹配
+            action = self._parse_action_env(env_output, strict=False)
             # print(action)
             available_actions = self.get_all_actions()
             # 如果错了环境agent可以多次调用，直到生成合理的solution
             if action in available_actions:
                 valid = True
+                action_in = True
             try_count += 1  
         if not valid:
+            # print(env_output)
             # TODO:对手失误，算作agent胜利 OR 平局？感觉都不太合理，给一个中间的奖励？
-            reward = 0.5
+            # 尽量不要出现这个情况，理论上应该是一直等到环境agent有动作才好——
+            # 甚至应该随机选一个作为动作才更加合理
+            reward = 0
             done = True
-            draw_prompt = 'Your opponent made a mistake! No winner.'
-            info['action_is_effective'] = True
+            if action_in:
+                draw_prompt = 'Your opponent action is wrong! No winner.'
+            else:
+                draw_prompt = 'Your opponent made a mistake! No winner.'
+            info['action_is_effective'] = False
             info['action_is_valid'] = True
-            info['success'] = True
+            # 不算成功吧，要不然会混淆模型训练结果
+            info['success'] = False
+            info['reward'] = reward
             self.reset()
             return draw_prompt, reward, done, info
         # 对手正确，更新环境
@@ -251,22 +295,24 @@ For example: <s>{actions[0]}</s> reason: <NO MORE THAN 20 WORDS>
         if env_win:
             # self.winner = self._get_winner()
             # if self.winner == self.players[self.current_player_index]:
-            reward = -1 # Simple reward: 1 for winning, 0 for draw/loss
+            reward = 0 
             done = True
             fail_prompt = 'Failed! The opponent wins! Game over. Final state: \n' + self._get_state_prompt()
             info['action_is_effective'] = True
             info['action_is_valid'] = True
             info['success'] = False
+            info['reward'] = reward
             self.reset()
             return fail_prompt, reward, done, info
         # 判断是否为平局
         if len(self.get_all_actions()) == 0:
-            reward = 0
+            reward = 0.5
             done = True
             draw_prompt = 'Draw! No winner.\n' + self._get_state_prompt()
             info['action_is_effective'] = True
             info['action_is_valid'] = True
             info['success'] = False
+            info['reward'] = reward
             self.reset()
             return draw_prompt, reward, done, info
         
@@ -278,6 +324,7 @@ For example: <s>{actions[0]}</s> reason: <NO MORE THAN 20 WORDS>
         info['action_is_effective'] = True
         info['action_is_valid'] = True
         info['success'] = False
+        info['reward'] = 0
         return train_prompt, reward, done, info
 
     # 需要说明一下这里的四子棋的条件horizontal、vertical、diagonal具体的例子
@@ -306,11 +353,10 @@ For example: <s>{actions[0]}</s> reason: <NO MORE THAN 20 WORDS>
                     actions0.append((i + 1, j + 1))
         return actions0
 
-    def _parse_action(self, llm_output: str) -> Optional[str]:
-        """Helper to extract action from LLM's raw output."""
-        pattern = r".*<s>\(\s*(\d+)\s*,\s*(\d+)\s*\)</s>.*"
-        # text = "<s>(1, 1)</s>"  # 你从模型输出得到的字符串
-        match = re.match(pattern, llm_output)
+    def _parse_action_trainer(self, action: str) -> Optional[Tuple]:
+        """Helper to extract action from trainer's raw output."""
+        pattern = r"\(\s*(\d+)\s*,\s*(\d+)\s*\)"
+        match = re.search(pattern, action)
         if match:
             row = int(match.group(1))
             col = int(match.group(2))
@@ -319,6 +365,32 @@ For example: <s>{actions[0]}</s> reason: <NO MORE THAN 20 WORDS>
         else:
             # print("匹配失败")
             action = None
+        return action
+    
+    def _parse_action_env(self, llm_output: str, strict=False) -> Optional[Tuple]:
+        """Helper to extract action from env's raw output."""
+        # print(llm_output)
+        pattern = r"<answer>\s*\(\s*(\d+)\s*,\s*(\d+)\s*\)\s*</answer>"
+        match = re.search(pattern, llm_output)
+        if match:
+            row = int(match.group(1))
+            col = int(match.group(2))
+            # print("匹配成功:", row, col)
+            action = (row, col)
+        else:
+            # 环境player并不需要非常精确的匹配、指令遵循等信息
+            if not strict:
+                pattern = r"\(\s*(\d+)\s*,\s*(\d+)\s*\)"
+                match = re.search(pattern, llm_output)
+                if match:
+                    row = int(match.group(1))
+                    col = int(match.group(2))
+                    # print("匹配成功:", row, col)
+                    action = (row, col)
+                else:
+                    action = None
+            else:
+                action = None
         return action
     
     def _update_state(self, action: str, player_id):
@@ -444,9 +516,12 @@ For example: <s>{actions[0]}</s> reason: <NO MORE THAN 20 WORDS>
 
 if __name__ == "__main__":
     # import matplotlib.pyplot as plt
+    for key in ["http_proxy", "https_proxy", "all_proxy", 
+            "HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY"]:
+        os.environ.pop(key, None)
     config = TicTacToeEnvConfig()
     env = TicTacToeEnv(config)
-    # print(env.reset(seed=42))
+    env.reset(seed=10)
     done = False
     while not done:
         print(env.render())

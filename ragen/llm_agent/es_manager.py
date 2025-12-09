@@ -130,6 +130,8 @@ class EnvStateManager:
         def _execute_actions(env, actions):
             acc_reward, turn_info, turn_done = 0, {}, False
             executed_actions = []
+            # 如果动作不是有效动作，actions直接就是空列表，不会进入下面的循环
+            # 对应的turn_done的变量就是False而不是真值
             for action in actions:
                 _, reward, done, info = env.step(action)
                 acc_reward += reward
@@ -169,11 +171,13 @@ class EnvStateManager:
             # execute actions in envs
             valid_actions = self._extract_map_valid_actions(entry, env_input['actions'])
             acc_reward, turn_info, turn_done, executed_actions = _execute_actions(env, valid_actions[:actions_left_before])
+            
             if len(valid_actions) != len(env_input['actions']) or not valid_actions:
                 self.rollout_cache[env_id]["penalty"] += self.sys_config.es_manager.format_penalty
                 
             status, history = _log_env_state(entry['status'], self.rollout_cache[env_id]['history'], entry['env'].render(), entry['max_actions_per_traj'], executed_actions, valid_actions, acc_reward, turn_done, turn_info, env_input)
             entry['status'] = status
+            # 如果未结束，直到动作超过max_actions_per_traj才会结束，设置truncated为True
             if entry['status'].num_actions >= entry['max_actions_per_traj'] and not turn_done:
                 entry['status'].truncated = True
                 entry['status'].terminated = True
@@ -206,12 +210,15 @@ class EnvStateManager:
                         custom_metric[k] = []
                     custom_metric[k].append(float(v))
             for k, v in custom_metric.items():
+                print(k, v)
                 # TODO: Move TURN_LVL_METRICS into the environment
                 if "Webshop" not in k or ("Webshop" in k and k in TURN_LVL_METRICS):
-                    env_metric[k] = np.sum(v) / (len(cache['history']) - 1) # NOTE: exclude the last observation
+                    # 打补丁：应该都是直接求平均值，都求和了不需要除以长度-1，要么等价要么不合理
+                    env_metric[k] = np.sum(v) / len(v)
+                    # env_metric[k] = np.sum(v) / (len(cache['history']) - 1) # NOTE: exclude the last observation
+                    print('env_metric', k, env_metric[k])
                 else:
                     env_metric[k] = np.sum(v)
-
 
             cache['history'][-1]['metrics'] = custom_metric
             env_metric = {f"{entry['tag']}/{k}": v for k, v in env_metric.items()}
@@ -232,9 +239,6 @@ class EnvStateManager:
                 if entry['tag'] == tag and entry['group_id'] == gid:
                     cache['metrics'][f"{tag}/pass@{self.group_size}"] = pass_success
         return rollout_cache
-
-
-
 
     def _update_cache_history(self, history: List[Dict], next_state, actions_left, num_actions_info: Optional[Dict] = None):
         """
