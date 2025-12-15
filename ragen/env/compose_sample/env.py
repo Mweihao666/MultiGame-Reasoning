@@ -65,7 +65,11 @@ class ComposeSampleEnv(BaseLanguageBasedEnv, gym.Env):
         self.sub_success = []
         # 采样，抽取用于嵌套的第二个任务
         if self.sample_method == 'random':
-            self.env1 = random.choice(self.sub_envs)
+            self.diff_list = [1 - success.get() for success in self.success_info]
+            task_id = np.random.choice(len(self.sub_envs))
+            print('set task', task_id)
+            self.env1_id = task_id
+            # self.env1 = random.choice(self.sub_envs)
         elif self.sample_method == 'difficulty-square':
             # 计算每个任务的难度，为 1 - 成功率
             self.diff_list = [1 - success.get() for success in self.success_info]

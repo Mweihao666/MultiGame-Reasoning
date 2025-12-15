@@ -1,11 +1,11 @@
 #!/bin/bash
 
 # test new model
-MODEL_PATH="mnt-mix"
+MODEL_PATH="mnt-mint"
 
-for i in {50..150..50}
+for i in {200..200..50}
 do
-    MODEL_NAME="mix${i}"
+    MODEL_NAME="mint${i}"
     echo "===== Testing model: $MODEL_NAME ====="
     # game test
     python reason_test/nash-new.py --model_path $MODEL_PATH --model_name $MODEL_NAME

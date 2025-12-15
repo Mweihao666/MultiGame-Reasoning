@@ -27,4 +27,4 @@ class ComposeSampleConfig:
     seed: int = 123
     k: int = 1024
     render_mode: str = 'text'
-    sample_method: str = 'difficulty-square'  # random or sequential
+    sample_method: str = 'random'  # random or sequential
