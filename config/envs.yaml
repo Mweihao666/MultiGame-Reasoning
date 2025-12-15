@@ -147,7 +147,7 @@ custom_envs:
         - model_name: "Qwen3-14B"
           port: "1414"
       mode: "train"
-      sample_method: "difficulty-square"
+      sample_method: "random"  # "difficulty-square"
       k: 4
 
   ALL_MINT:
