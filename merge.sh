@@ -1,5 +1,5 @@
 #!/bin/bash
-ORI_FILE="mnt-mint"
+ORI_FILE="mnt-mint-random"
 TAR_FILE="mint"
 HF_PATH="/root/autodl-tmp/Qwen2.5-1.5B-Instruct"
 

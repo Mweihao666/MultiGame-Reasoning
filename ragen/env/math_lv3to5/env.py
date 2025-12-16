@@ -50,6 +50,7 @@ class MathEnv(BaseLanguageBasedEnv, gym.Env):
         # 和之前的get_state_prompt相同的作用 生成当前棋局的信息
         assert self.question0 is not None, "question0 is None, please reset the environment first"
         prompt = self.question0['extra_info']['question']
+        # print(self.question0['extra_info']['answer'])
         return prompt
 
     def step(self, action: str) -> Tuple[str, float, bool, Dict]:

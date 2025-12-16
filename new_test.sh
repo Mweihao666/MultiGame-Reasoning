@@ -1,9 +1,9 @@
 #!/bin/bash
 
 # test new model
-MODEL_PATH="mnt-mint"
+MODEL_PATH="mnt-mint-random"
 
-for i in {200..200..50}
+for i in {50..150..50}
 do
     MODEL_NAME="mint${i}"
     echo "===== Testing model: $MODEL_NAME ====="

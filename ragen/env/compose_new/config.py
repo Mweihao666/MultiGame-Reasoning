@@ -1,13 +1,30 @@
 from dataclasses import dataclass, field
-from typing import Optional, Tuple, List
+from typing import Optional, Tuple, List, Dict, Any
 
 @dataclass
 class ComposeNewConfig:
     base_env_list: List[str] = field(
         default_factory=lambda: ["math_lv3to5", "nash_new"]
     )
-    reward_improve: bool = False
-    k: int = 1024  # 计算成功率使用的最近k个历史信息
+    player_nums: List[int] = field(
+        default_factory=lambda: [0, 0]
+    )
+    player_infos: List[List[Dict[str, Any]]] = field(
+        # default_factory=lambda: [{'model_name': 'deepseek'}]
+        # default_factory=lambda: [{'model_name': 'tictactoe/grpo/game_40', 'port': '4040'}]
+        default_factory=lambda: 
+            # [{'model_name': 'google/gemini-2.5-flash'}, # {'model_name': 'google/gemini-2.5-flash'},
+            #  {'model_name': 'google/gemini-2.5-flash'},{'model_name': 'google/gemini-2.5-flash'},]
+            # [{"model_name": "x-ai/grok-4-fast"}, {"model_name": "x-ai/grok-4-fast"},
+            #  {"model_name": "x-ai/grok-4-fast"}, {"model_name": "x-ai/grok-4-fast"},]
+            [[{'': ''}],[{'': ''}]]
+            # [{'model_name': "gemini-2.5-flash-nothinking"}]]
+            # [{'model_name': 'Qwen3-14B', 'port': '1414'},
+            #  {'model_name': 'Qwen3-14B', 'port': '1414'},
+            #  {'model_name': 'Qwen3-14B', 'port': '1414'}]]
+    )
+    reward_improve: bool = True
+    k: int = 4 # 计算成功率使用的最近k个epoch
     mode: str = 'test'  # train or test for mix env.
     seed: int = 123
     render_mode: str = 'text'
