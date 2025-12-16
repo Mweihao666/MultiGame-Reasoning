@@ -130,6 +130,7 @@ custom_envs:
       base_env_list: ["math_lv3to5", "nash_new"]
       mode: "train"
       reward_improve: True
+      k: 4
 
   MNT_MINT:
     env_type: compose_sample

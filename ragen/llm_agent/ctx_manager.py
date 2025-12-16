@@ -230,8 +230,9 @@ class ContextManager:
             group_tags = [1] * len(env_outputs)
         else:
             raise ValueError(f"Invalid grouping: {grouping}")
-
-
+        # print('group method', grouping)
+        # print('group_tags', group_tags)
+        # print('norm_method', method) mean_std
         if method == "mean_std":
             norm_func = lambda x: (x - x.mean(dim=-1, keepdim=True)) / (x.std(dim=-1, keepdim=True) + 1e-6) if x.std(dim=-1, keepdim=True).abs().max() > 1e-6 else torch.zeros_like(x) # stable to bf16 than x.std()
         elif method == "mean":
@@ -250,17 +251,20 @@ class ContextManager:
                 group2index[env_tag] = []
             group2index[env_tag].append(i)
         group2index = {k: torch.tensor(v) for k, v in group2index.items()}
-
+        # print('group2index', group2index)
         
         # apply penalty pre-normalization 在这里会把之前的penalty项考虑进去
         acc_scores = score_tensor[:, -1]
         normalized_acc_scores = acc_scores.clone()
         penalty = torch.tensor([env_output.get("penalty", 0) for env_output in env_outputs], dtype=torch.float32)
         normalized_acc_scores = normalized_acc_scores + penalty
-
+        # print('ori_scores', normalized_acc_scores)
         if len(group2index) < acc_scores.shape[0]: # the group size > 1
             for group, index in group2index.items():
+                # print('before', normalized_acc_scores[index])
                 normalized_acc_scores[index] = norm_func(normalized_acc_scores[index])
+        #         print('after', normalized_acc_scores[index])
+        # print('normalized_acc_scores', normalized_acc_scores)
         # print("normalized_acc_scores: ", normalized_acc_scores)
         score_tensor[:, -1] = normalized_acc_scores
 
@@ -451,6 +455,7 @@ class ContextManager:
         # print(position_ids)  这个position+ids我之前修改过吗……确认一下，总感觉不对
         if prepare_for_update:
             # 看一下打包好的input结果
+            # print(env_outputs[0])
             scores = [[i.get('reward', 0.0) for i in env_output['history']] for env_output in env_outputs]
             score_tensor, loss_mask, response_mask = get_masks_and_scores(input_ids, self.tokenizer, scores, use_turn_scores=self.config.agent_proxy.use_turn_scores, enable_response_mask=self.config.enable_response_mask)
 

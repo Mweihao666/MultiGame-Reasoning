@@ -67,7 +67,7 @@ class ComposeSampleEnv(BaseLanguageBasedEnv, gym.Env):
         if self.sample_method == 'random':
             self.diff_list = [1 - success.get() for success in self.success_info]
             task_id = np.random.choice(len(self.sub_envs))
-            print('set task', task_id)
+            # print('set task', task_id)
             self.env1_id = task_id
             # self.env1 = random.choice(self.sub_envs)
         elif self.sample_method == 'difficulty-square':
@@ -80,7 +80,7 @@ class ComposeSampleEnv(BaseLanguageBasedEnv, gym.Env):
             # print(p_list)
             # 进行采样，验证了这里就是概率值
             task_id = np.random.choice(len(self.diff_list), p=p_list)
-            print('set task', task_id)
+            # print('set task', task_id)
             self.env1_id = task_id
         else:
             print('[ERROR] sample method not implemented!')
@@ -128,7 +128,7 @@ class ComposeSampleEnv(BaseLanguageBasedEnv, gym.Env):
         if sum(TRAIN_STEPS) % self.k == 0:
             for s in self.success_info:
                 s.update()
-                print('success update')
+                # print('success update')
         # 计算第二个任务的reward信息
         difficulty = self.diff_list[self.env1_id] / max(self.diff_list)
         # print('difficulty', difficulty)
