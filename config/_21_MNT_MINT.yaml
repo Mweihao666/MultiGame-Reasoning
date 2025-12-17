@@ -28,4 +28,4 @@ es_manager:  # 数值沿用原始设定，并没有缩小规模
       n_groups: [4, 4, 4] # [256] -> [32] # TODO: If not set, all env names divide nums equally. Under the same group, the env config and env seed (prompt) are equal in each generation
 
 agent_proxy:
-  max_turn: 6 # math_turn + tictactoe_turn
+  max_turn: 7 # math_turn + nash_turn + tictactoe_turn
