@@ -44,7 +44,7 @@ class ComposeNewEnv(BaseLanguageBasedEnv, gym.Env):
                 env_config = Config()
             env = REGISTERED_ENVS[env_name](config=env_config)
             self.sub_envs.append(env)
-            self.env_success_info.append(create_success_info(env_name))
+            self.env_success_info.append(create_success_info(env_name, max_num=self.config.max_num))
         # self.reset(self.seed)
     
     def reset(self, seed, **kwargs):

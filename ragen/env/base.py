@@ -348,21 +348,25 @@ class EnvPlayer():
 
 
 class SuccessRate():
-    def __init__(self, k=4, alpha=1, beta=1):
+    def __init__(self, max_num=500, alpha=1, beta=1):
         self.success_list = []
-        self.k = k
+        self.max_num = max_num
         self.alpha = alpha
         self.beta = beta
         self.success_rate = 0
     
     def record(self, success):
+        if len(self.success_list) >= self.max_num:
+            print('exceed max num. pop.')
+            self.success_list.pop(0)
         self.success_list.append(success)
+        print(self.success_list)
         return self.success_rate
 
     def update(self):
         # print(self.success_list)
+        # 不再清空，避免相近时间调用.update导致reward震荡
         self.success_rate = (sum(self.success_list) + self.alpha) / (len(self.success_list) + self.alpha + self.beta)
-        self.success_list = []
 
     def get(self):
         return self.success_rate
@@ -442,11 +446,11 @@ def seed_everything(seed=11):
 
 if __name__ == "__main__":
     import random
-    Success = SuccessRate()
+    Success = SuccessRate(max_num=5)
     for i in range(10):
         Success.record(random.randint(0, 1))
-    Success.update()
-    print(Success.get())
+        Success.update()
+        print(Success.get())
     for i in range(10):
         Success.record(random.randint(0, 1))
     Success.update()
