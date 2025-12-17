@@ -219,7 +219,7 @@ class ContextManager:
         NOTE: only support score at the last token for now
         """
         assert self.config.agent_proxy.use_turn_scores == False, "Reward normalization is not supported for use_turn_scores == True"
-        
+        # print(env_outputs)
         rn_cfg = self.config.agent_proxy.reward_normalization
         grouping, method = rn_cfg.grouping, rn_cfg.method
         if grouping == "state":
@@ -263,7 +263,8 @@ class ContextManager:
             for group, index in group2index.items():
                 # print('before', normalized_acc_scores[index])
                 normalized_acc_scores[index] = norm_func(normalized_acc_scores[index])
-        #         print('after', normalized_acc_scores[index])
+                # print('after', normalized_acc_scores[index])
+                # exit(0)
         # print('normalized_acc_scores', normalized_acc_scores)
         # print("normalized_acc_scores: ", normalized_acc_scores)
         score_tensor[:, -1] = normalized_acc_scores

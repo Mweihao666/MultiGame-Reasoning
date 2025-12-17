@@ -84,9 +84,9 @@ def create_env_player_for_config(config) -> EnvPlayer:
 _env_success_info = {}
 
 
-def create_success_info(env_name):
+def create_success_info(env_name, max_num: int = 500):
     if env_name not in _env_success_info:
-        _env_success_info[env_name] = SuccessRate()
+        _env_success_info[env_name] = SuccessRate(max_num=max_num)
         print('create success_info dictionary for ENV', env_name)
     return _env_success_info[env_name]
 

@@ -25,6 +25,7 @@ class ComposeNewConfig:
     )
     reward_improve: bool = True
     k: int = 4 # 计算成功率使用的最近k个epoch
+    max_num: int = 500 # 计算成功率的时候使用的最近多少个success数据
     mode: str = 'test'  # train or test for mix env.
     seed: int = 123
     render_mode: str = 'text'
