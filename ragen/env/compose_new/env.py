@@ -120,9 +120,9 @@ class ComposeNewEnv(BaseLanguageBasedEnv, gym.Env):
         for i in range(len(self.env_names)):
             info[f'{self.env_names[i]}_success'] = self.sub_success[i]
         if self.reward_improve:
-            # 记录任务成功率方便查看模型情况
+            # 记录任务成功率方便查看模型情况——直接用difficult打印避免混乱
             for i in range(len(self.env_names)):
-                info[f'{self.env_names[i]}_success_rate'] = self.env_success_info[i].get()
+                info[f'{self.env_names[i]}_success_rate'] = 1 - self.diff_list[i]# self.env_success_info[i].get()
         return prompt, reward, done, info
 
     def close(self):
