@@ -357,10 +357,8 @@ class SuccessRate():
     
     def record(self, success):
         if len(self.success_list) >= self.max_num:
-            print('exceed max num. pop.')
             self.success_list.pop(0)
         self.success_list.append(success)
-        print(self.success_list)
         return self.success_rate
 
     def update(self):
