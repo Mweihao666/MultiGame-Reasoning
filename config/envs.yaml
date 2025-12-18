@@ -131,6 +131,7 @@ custom_envs:
       mode: "train"
       reward_improve: True
       k: 4
+      max_num: 500
 
   MNT_MINT:
     env_type: compose_new
@@ -152,24 +153,36 @@ custom_envs:
       mode: "train"
       reward_improve: True
       k: 4
+      max_num: 500
 
   ALL_MINT:
-    env_type: compose_sample
-    max_actions_per_traj: 6 # used in environment state manager to control the actual max actions executed per trajectory
+    env_type: compose_new
+    max_actions_per_traj: 9 # used in environment state manager to control the actual max actions executed per trajectory
     env_instruction: ""
     max_tokens: 200 # used to curate llm prompt "max words", not used for rollout
     env_config: # keys should be a subset of MathConfig
-      env0: "math_lv3to5"
-      sample_env_list: ["nash_new", "tictactoe", "undercover"]
-      player_nums: [0, 2, 4]
+      # env0: "math_lv3to5"
+      base_env_list: ["math_lv3to5", "nash_new", "tictactoe", "undercover"]
+      player_nums: [0, 0, 2, 4]
       player_infos: 
-      - model_name: ''
-      - model_name: 'Qwen3-14B'
-        port: '1414'
-      
+      - 
+        - { "": "" }
+      - 
+        - { "": "" }
+      - 
+        - model_name: "Qwen3-14B"
+          port: "1414"
+      - 
+        - model_name: "Qwen3-14B"
+          port: "1414"
+        - model_name: "Qwen3-14B"
+          port: "1414"
+        - model_name: "Qwen3-14B"
+          port: "1414"
       mode: "train"
-      sample_method: "difficulty-square"
-      k: 1024
+      reward_improve: True
+      k: 4
+      max_num: 500
 
   NashNew:
     env_type: nash_new
