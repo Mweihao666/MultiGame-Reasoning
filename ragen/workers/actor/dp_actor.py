@@ -36,7 +36,7 @@ from verl.utils.ulysses import gather_outpus_and_unpad, ulysses_pad_and_slice_in
 from verl.workers.actor import BasePPOActor
 
 from peft import PeftModel
-
+from ragen.utils import safe_logprobs_from_logits
 
 __all__ = ["DataParallelPPOActor"]
 
@@ -119,7 +119,13 @@ class DataParallelPPOActor(BasePPOActor):
                 inplace_backward = True
                 if calculate_entropy:
                     inplace_backward = False
-                log_probs = logprobs_from_logits(logits=logits_rmpad, labels=input_ids_rmpad_rolled, inplace_backward=inplace_backward)
+                # log_probs = logprobs_from_logits(logits=logits_rmpad, labels=input_ids_rmpad_rolled, inplace_backward=inplace_backward)
+                log_probs = safe_logprobs_from_logits(
+                    logits=logits_rmpad,
+                    labels=input_ids_rmpad_rolled,
+                    logprobs_fn=logprobs_from_logits,
+                    inplace_backward=inplace_backward,
+                )
 
                 # compute entropy
                 if calculate_entropy:
@@ -152,7 +158,8 @@ class DataParallelPPOActor(BasePPOActor):
                 logits = output.logits
                 logits.div_(temperature)
                 logits = logits[:, -response_length - 1 : -1, :]  # (bsz, response_length, vocab_size)
-                log_probs = logprobs_from_logits(logits, micro_batch["responses"])
+                # log_probs = logprobs_from_logits(logits, micro_batch["responses"])
+                log_probs = safe_logprobs_from_logits(logits, micro_batch["responses"], logprobs_fn=logprobs_from_logits)
                 if calculate_entropy:
                     entropy = verl_F.entropy_from_logits(logits)  # (bsz, response_length)
 
@@ -167,7 +174,7 @@ class DataParallelPPOActor(BasePPOActor):
             grad_norm = fsdp2_clip_grad_norm_(self.actor_module.parameters(), max_norm=self.config.grad_clip)
         else:
             grad_norm = torch.nn.utils.clip_grad_norm_(self.actor_module.parameters(), max_norm=self.config.grad_clip)
-
+        # print('grad_norm', grad_norm)
         # if grad_norm is not finite, skip the update
         if not torch.isfinite(grad_norm):
             print(f"ERROR: rank {torch.distributed.get_rank()} actor grad_norm is not finite: {grad_norm}")
@@ -324,6 +331,10 @@ class DataParallelPPOActor(BasePPOActor):
                     if entropy_coeff != 0:
                         calculate_entropy = True
                     entropy, log_prob = self._forward_micro_batch(micro_batch=data, temperature=temperature, calculate_entropy=calculate_entropy)
+                    # print('log_prob', log_prob)
+                    # print('old_log_prob', old_log_prob)
+                    # print('advantages', advantages)
+                    # print('entropy', entropy)
                     pg_loss, pg_clipfrac, ppo_kl, pg_clipfrac_lower = compute_policy_loss(
                         old_log_prob=old_log_prob,
                         log_prob=log_prob,
@@ -341,10 +352,12 @@ class DataParallelPPOActor(BasePPOActor):
 
                         # compute policy loss
                         policy_loss = pg_loss - entropy_loss * entropy_coeff
+                        # print('entropy_loss', entropy_loss)
+                        # print('policy_loss', policy_loss)
                     else:
                         policy_loss = pg_loss
-
-                    if self.config.use_kl_loss:
+                    # 只有kl_loss_coef不为0的时候计算才有意义
+                    if self.config.use_kl_loss and self.config.kl_loss_coef:
                         ref_log_prob = data["ref_log_prob"]
                         # compute kl loss
                         kld = kl_penalty(logprob=log_prob, ref_logprob=ref_log_prob, kl_penalty=self.config.kl_loss_type)
