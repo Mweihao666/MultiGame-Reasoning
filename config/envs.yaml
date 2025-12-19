@@ -151,7 +151,7 @@ custom_envs:
         - model_name: "Qwen3-14B"
           port: "1414"
       mode: "train"
-      reward_improve: True
+      reward_improve: False
       k: 4
       max_num: 500
 

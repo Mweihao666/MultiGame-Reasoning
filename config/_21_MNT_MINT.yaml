@@ -5,10 +5,12 @@ trainer:
   experiment_name: MNT-MINT
   save_freq: 50
 
+ppo_mini_batch_size: 32
+
 actor_rollout_ref:
   rollout:
     max_model_len: 10000
-    gpu_memory_utilization: 0.6
+    gpu_memory_utilization: 0.7
     max_num_batched_tokens: 12000
 
 es_manager:  # 数值沿用原始设定，并没有缩小规模

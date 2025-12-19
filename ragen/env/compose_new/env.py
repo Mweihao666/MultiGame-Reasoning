@@ -66,6 +66,7 @@ class ComposeNewEnv(BaseLanguageBasedEnv, gym.Env):
 
     def step(self, action):
         # 找到当前step对应环境并调用对应的step函数
+        # print(action)
         env = self.sub_envs[self.phase]
         prompt, reward, done, info = env.step(action)
         # 子任务未结束、继续子任务
