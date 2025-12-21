@@ -19,6 +19,6 @@ WANDB_MODE=offline RAY_DEDUP_LOGS=0 python train.py --config-name _8_tictactoe \
  trainer.total_training_steps=100 \
  trainer.n_gpus_per_node=2 \
  actor_rollout_ref.rollout.tensor_model_parallel_size=2 \
- trainer.experiment_name=tictactoe-qwen14b \
+ trainer.experiment_name=tictactoe8-qwen \
  $USE_GRPO 2>&1 | tee "$LOG_DIR/grpo_${TIMESTAMP}.log" &
 # WANDB_MODE=offline python train.py --config-name _2_sokoban system.CUDA_VISIBLE_DEVICES=\"3,4\" trainer.n_gpus_per_node=2 actor_rollout_ref.rollout.tensor_model_parallel_size=2 trainer.experiment_name=sokoban-grpo actor_rollout_ref.rollout.rollout_filter_ratio=0.25 $USE_GRPO &

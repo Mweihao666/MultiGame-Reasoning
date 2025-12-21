@@ -56,6 +56,9 @@ from verl.utils.torch_functional import masked_mean
 from ragen.llm_agent.agent_proxy import LLMAgentProxy
 from ragen.utils import GenerationsLogger
 
+# add step logging
+from ragen.env.base import TRAIN_STEPS
+
 
 def compute_advantage(data: DataProto, adv_estimator, gamma=1.0, lam=1.0, num_repeat=1, multi_turn=False, norm_adv_by_std_in_grpo=True, bi_level_gae=False, high_level_gamma=1.0):
     # Back-compatible with trainers that do not compute response mask in fit
@@ -468,7 +471,7 @@ class RayAgentTrainer(VerlRayPPOTrainer):
             # 在这里直接 .sum(dim=-1)了，貌似并没有影响
             rm_scores = batch.batch["original_rm_scores"].sum(dim=-1).view(num_groups, group_size)
             in_group_std = rm_scores.std(dim=-1)
-            print(in_group_std)  # 看一下是否是方差引发的grad为0的情况
+            # print(in_group_std)  # 看一下是否是方差引发的grad为0的情况——应该不是这个原因，这个rollout的方差也不是计算adv的方差
             in_group_max = rm_scores.max(dim=-1).values
             in_group_mean = rm_scores.mean(dim=-1)
             if rollout_filter_ratio == 1:
@@ -507,6 +510,8 @@ class RayAgentTrainer(VerlRayPPOTrainer):
         self.start_time = time.time()
         for step in range(self.total_training_steps):
             # metrics = {}
+            # add training_step logging
+            TRAIN_STEPS.append(1)
             timing_raw = {}
 
             batch: DataProto = DataProto()

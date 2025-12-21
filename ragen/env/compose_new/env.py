@@ -5,7 +5,7 @@ import nashpy as nash
 import random
 import gymnasium as gym
 from .config import ComposeNewConfig
-from ragen.env.base import BaseLanguageBasedEnv, seed_everything, timed
+from ragen.env.base import BaseLanguageBasedEnv, seed_everything, timed, TRAIN_STEPS
 from ragen.env.env_factory import create_success_info, clean_success_info
 
 class ComposeNewEnv(BaseLanguageBasedEnv, gym.Env):
@@ -25,26 +25,34 @@ class ComposeNewEnv(BaseLanguageBasedEnv, gym.Env):
         self.env_success_info = []
         self.sub_rewards = []
         self.sub_success = []
+        # 存储各个任务的难度信息——使用这个采样子任务以及计算reward
+        self.diff_list = []
+        self.k = self.config.k
         self.reward_improve = self.config.reward_improve
         # 延迟导入，避免循环依赖
         from ragen.env import REGISTERED_ENV_CONFIGS, REGISTERED_ENVS
         
-        for env_name in base_envs:
+        for i in range(len(base_envs)):
+            env_name = base_envs[i]
             Config = REGISTERED_ENV_CONFIGS[env_name]
             if hasattr(Config, 'mode'):
                 env_config = Config(mode=mode)
+            elif self.config.player_nums[i]:
+                player_info = self.config.player_infos[i]
+                env_config = Config(player_info=player_info)
             else:
                 env_config = Config()
             env = REGISTERED_ENVS[env_name](config=env_config)
             self.sub_envs.append(env)
-            self.env_success_info.append(create_success_info(env_name, self.config.k))
-        self.reset(self.seed)
+            self.env_success_info.append(create_success_info(env_name, max_num=self.config.max_num))
+        # self.reset(self.seed)
     
     def reset(self, seed, **kwargs):
         seed_everything(seed)
         for env in self.sub_envs:
             env.reset(seed, **kwargs)
-        # 不再随机生成任务顺序——担心最开始不好收敛
+        # 计算任务难度——方便后续任务reward分配
+        self.diff_list = [1 - success.get() for success in self.env_success_info]
         # 初始化任务阶段
         self.phase = 0
         # 初始化子任务成功率
@@ -58,6 +66,7 @@ class ComposeNewEnv(BaseLanguageBasedEnv, gym.Env):
 
     def step(self, action):
         # 找到当前step对应环境并调用对应的step函数
+        # print(action)
         env = self.sub_envs[self.phase]
         prompt, reward, done, info = env.step(action)
         # 子任务未结束、继续子任务
@@ -67,10 +76,11 @@ class ComposeNewEnv(BaseLanguageBasedEnv, gym.Env):
             # 子任务并没有全部完成，但是需要记录当前子任务的成功情况
             # 记录 方便后续返回info字段的成功率信息
             self.sub_success.append(info['success'])
-            # 更新子任务成功率
-            success_rate = self.env_success_info[self.phase].update(info['success'])
+            # 记录子任务成功率
+            self.env_success_info[self.phase].record(info['success'])
             if self.reward_improve and info['success']:
-                reward = 1 - success_rate
+                difficult = self.diff_list[self.phase] / max(self.diff_list)
+                reward = difficult * reward
             # 记录子任务reward 
             self.sub_rewards.append(reward)
             # 进入下一个子任务
@@ -82,13 +92,19 @@ class ComposeNewEnv(BaseLanguageBasedEnv, gym.Env):
             return prompt, reward, done, info
         # 同样更新成功率信息字典
         self.sub_success.append(info['success'])
-        success_rate = self.env_success_info[self.phase].update(info['success'])
+        # 记录子任务成功率
+        self.env_success_info[self.phase].record(info['success'])
+        if sum(TRAIN_STEPS) % self.k == 0:
+            for s in self.env_success_info:
+                s.update()
         if self.reward_improve and info['success']:
-            reward = 1 - success_rate
+            difficult = self.diff_list[self.phase] / max(self.diff_list)
+            reward = difficult * reward
         self.sub_rewards.append(reward)
         # 计算总体的reward以及info等信息
         # 这个地方的设计可能不靠谱——都对应该设置为1，只有一个对才应该是一半的奖励
         # 求平均值对两个都作对的奖励可能不够？整体reward都偏小了
+        # print(self.sub_rewards)
         reward = sum(self.sub_rewards) / len(self.sub_rewards)
         prompt = self.render()
         done = True
@@ -101,11 +117,13 @@ class ComposeNewEnv(BaseLanguageBasedEnv, gym.Env):
             action_is_effective=True,
             success=success,
         )
-        # TODO：验证是否可以在所有步骤全结束之后再记录而不是每一次都返回？
+        # 记录子任务成功情况，方便查看模型训练方向
+        for i in range(len(self.env_names)):
+            info[f'{self.env_names[i]}_success'] = self.sub_success[i]
         if self.reward_improve:
-            # 记录任务成功率方便查看模型情况
+            # 记录任务成功率方便查看模型情况——直接用difficult打印避免混乱
             for i in range(len(self.env_names)):
-                info[f'{self.env_names[i]}_success_rate'] = self.env_success_info[i].get()
+                info[f'{self.env_names[i]}_success_rate'] = 1 - self.diff_list[i]# self.env_success_info[i].get()
         return prompt, reward, done, info
 
     def close(self):
