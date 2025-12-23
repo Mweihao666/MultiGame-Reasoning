@@ -345,11 +345,11 @@ class UndercoverEnv(MultiGameEnv):
         if not undercover_alive:
             self.game_over = True
             self.winner = "Civilian"
-            print('Game ends. Civilian win.')
+            # print('Game ends. Civilian win.')
         else:
             self.game_over = True
             self.winner = "Undercover"
-            print('Game ends. Undercover win.')
+            # print('Game ends. Undercover win.')
 
     def _start_new_round(self):
         """Resets state for a new round of descriptions and votes."""
