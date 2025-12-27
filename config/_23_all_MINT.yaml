@@ -8,7 +8,7 @@ trainer:
 actor_rollout_ref:
   rollout:
     max_model_len: 15000
-    gpu_memory_utilization: 0.7
+    gpu_memory_utilization: 0.3
     max_num_batched_tokens: 16384
     tensor_model_parallel_size: 2
 

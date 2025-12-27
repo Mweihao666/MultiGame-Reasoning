@@ -3,7 +3,7 @@ defaults:
 
 trainer:
   experiment_name: undercover
-  save_freq: 10
+  save_freq: 50
 
 actor_rollout_ref:
   rollout:
