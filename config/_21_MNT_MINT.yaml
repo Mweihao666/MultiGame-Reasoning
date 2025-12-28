@@ -5,23 +5,23 @@ trainer:
   experiment_name: MNT-MINT
   save_freq: 50
 
-ppo_mini_batch_size: 32
+ppo_mini_batch_size: 16
 
 actor_rollout_ref:
   rollout:
     max_model_len: 10000
-    gpu_memory_utilization: 0.7
+    gpu_memory_utilization: 0.5
     max_num_batched_tokens: 12000
 
 es_manager:  # 数值沿用原始设定，并没有缩小规模
   format_penalty: -0.1
   train:
-    env_groups: 8 # 12 + 4
+    env_groups: 4 # 12 + 4
     # under the same group, the env config and env seed are ensured to be equal
     group_size: 16  # 16
     env_configs:
       tags: ["MNT_MINT"]
-      n_groups: [8] # If not set, all env names divide nums equally. Under the same group, the env config and env seed (prompt) are equal in each generation
+      n_groups: [4] # If not set, all env names divide nums equally. Under the same group, the env config and env seed (prompt) are equal in each generation
   val:
     env_groups: 12 # 256 -> 32
     group_size: 1 # should be set to 1 because when val temperature is set to 0 and group size > 1, there will be repetitive prompts which leads to same trajectory.
