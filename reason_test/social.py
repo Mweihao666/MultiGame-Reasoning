@@ -1,7 +1,5 @@
 import json
 from collections import Counter
-from vllm import LLM, SamplingParams
-from verl.utils import hf_tokenizer
 import argparse
 import tqdm
 import random
@@ -9,18 +7,31 @@ import re
 import os
 import logging
 import time
+from model_adapter import create_model_adapter
 
 root_path = '/root/autodl-tmp'
 batch_size = 16
 
 parser = argparse.ArgumentParser()
+parser.add_argument("--model_type", type=str, default='vllm', 
+                    choices=['deepseek', 'gemini', 'bbl-lite', 'vllm'])
 parser.add_argument("--model_path", type=str, default="nash-math")
 parser.add_argument("--model_name", type=str, default="Qwen2.5-1.5B-Instruct")
+parser.add_argument("--port", type=str, default="2100", help="vLLM 服务端口（仅用于 vllm 和 bbl-lite 类型）")
+parser.add_argument("--max_samples", type=int, default=None, help="最大测试样本数（None表示使用全部样本）")
 args = parser.parse_args()
+model_type = args.model_type
 model_path = args.model_path
 model_name = args.model_name
-tokenizer = hf_tokenizer(f"{root_path}/{model_path}/{model_name}")
-# tokenizer = hf_tokenizer(f"{root_path}/{model_name}")
+port = args.port
+
+# 创建模型适配器
+model_adapter = create_model_adapter(
+    model_type=model_type,
+    model_name=model_name,
+    model_path=model_path,
+    port=port
+)
 
 # jsonl不能直接读取，每一行是一个单独的json对象
 # test_data = json.load(open(f"{root_path}/reasoning/socialiqa-train-dev/dev.jsonl"))
@@ -33,22 +44,8 @@ with open(f"{root_path}/reasoning/socialiqa-train-dev/dev-labels.lst", "r") as f
 label_all = [int(l) - 1 for l in label_all]
 
 def load_llm():
-    os.environ["VLLM_WORKER_MULTIPROC_METHOD"] = "spawn"
-    os.environ["CUDA_VISIBLE_DEVICES"] = '0'
-    # tokenizer = AutoTokenizer.from_pretrained(config.actor_rollout_ref.model.path)
-    model = f'{root_path}/{model_path}/{model_name}'
-    # model = f"{root_path}/{model_name}"
-    # ro_config = config.actor_rollout_ref.rollout
-    llm = LLM(
-		model,
-        max_model_len=8000,
-	)
-    print("LLM initialized")
-    sampling_params = SamplingParams(
-		max_tokens=600, # ro_config.response_length,
-		temperature=0.5,  # ro_config.val_kwargs.temperature,
-	)
-    return llm, sampling_params
+    """兼容性函数，返回 model_adapter 和 None"""
+    return model_adapter, None
 
 
 def reformat_prompt(prompt0, choice):
@@ -62,10 +59,7 @@ def reformat_prompt(prompt0, choice):
         + f"C. {choice[2]}\n"
     )
     prompt = formatted_question + "Let\'s think step by step and always output: <think> [Your thoughts] </think> <answer> [your answer] </answer> with no extra text. Strictly follow this format. Max response length: 200 words (tokens)."
-    message = [{"role": "system", "content": "You're a helpful assistant. "},
-               {"role": "user", "content": prompt}]
-    # apply_chat_template
-    prompt = tokenizer.apply_chat_template(message, add_generation_prompt=True, tokenize=False)
+    # 注意：chat template 现在由 model_adapter 处理
     return prompt
 
 
@@ -98,10 +92,11 @@ def extract_choice(text: str):
     return None
 
 
-def test_social(llm, sampling_params, social, ground_truth):
+def test_social(llm, sampling_params, social, ground_truth, max_samples=None):
     answers = []
     acc_list = []
-    for i in tqdm.trange(0, len(social), batch_size):  # len(math['test'])
+    total_samples = min(len(social), max_samples) if max_samples else len(social)
+    for i in tqdm.trange(0, total_samples, batch_size):  # len(math['test'])
         # 调整prompt内容，之前的格式不太对劲，导致模型输出的最后一个数字不是最后一个数字
         data = social[i: i + batch_size]
         labels = ground_truth[i: i + batch_size]
@@ -110,10 +105,32 @@ def test_social(llm, sampling_params, social, ground_truth):
         doc_to_target: "{{answer}}"  # 正确答案的索引  
         doc_to_choice: "{{[answerA, answerB, answerC]}}"  # 三个选项
         '''
-        prompt = [reformat_prompt(data[j]['context'] + '\nQuestion: ' + 
+        prompts = [reformat_prompt(data[j]['context'] + '\nQuestion: ' + 
                                   data[j]['question'], 
-                                 [data[j]['answerA'], data[j]['answerB'], data[j]['answerC']]) for j in range(len(data))]# 模型推理
-        outputs = llm.generate(prompt, sampling_params)
+                                 [data[j]['answerA'], data[j]['answerB'], data[j]['answerC']]) for j in range(len(data))]
+        
+        # 使用 model_adapter 逐个生成（API 调用不支持批量）
+        outputs = []
+        for prompt in prompts:
+            try:
+                output_text = llm.generate(
+                    prompt=prompt,
+                    max_tokens=600,
+                    temperature=0.5,
+                    use_chat_template=True
+                )
+                # 包装成类似 vLLM 输出的格式，保持兼容性
+                class FakeOutput:
+                    def __init__(self, text):
+                        self.text = text
+                class FakeRequestOutput:
+                    def __init__(self, text):
+                        self.outputs = [FakeOutput(text)]
+                outputs.append(FakeRequestOutput(output_text))
+            except Exception as e:
+                print(f"⚠️  生成失败: {e}")
+                outputs.append(FakeRequestOutput(""))
+        
         for j, out in enumerate(outputs):
             # answer, choices, subject
             solution = extract_solution(out.outputs[0].text)
@@ -241,7 +258,7 @@ if __name__ == '__main__':
     logging.getLogger("vllm").setLevel(logging.ERROR)
     path0 = f'/root/autodl-tmp/reasoning'
     llm, sampling_params = load_llm()
-    answers, acc_list = test_social(llm, sampling_params, social, label_all)
+    answers, acc_list = test_social(llm, sampling_params, social, label_all, max_samples=args.max_samples)
     # 保存测试结果到日志文件
     save_log(model_name, acc_list)
     # 保存部分测试结果，便于分析

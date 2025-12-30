@@ -7,46 +7,39 @@ import tqdm
 from math_verify import parse, verify
 import os
 import logging
-from vllm import LLM, SamplingParams
-from verl.utils import hf_tokenizer
 import argparse
 from datasets import load_dataset
 import random
 import string
+from model_adapter import create_model_adapter
 
 root_path = '/root/autodl-tmp'  # '/data1/lvnuoyan' 
 batch_size = 16
 parser = argparse.ArgumentParser()
+parser.add_argument("--model_type", type=str, default='vllm', 
+                    choices=['deepseek', 'gemini', 'bbl-lite', 'vllm'])
 parser.add_argument("--model_path", type=str, default="nash-new")
 parser.add_argument("--model_name", type=str, default="nash50")
+parser.add_argument("--port", type=str, default="2100", help="vLLM 服务端口（仅用于 vllm 和 bbl-lite 类型）")
+parser.add_argument("--max_samples", type=int, default=None, help="最大测试样本数（None表示使用全部样本）")
 args = parser.parse_args()
+model_type = args.model_type
 model_path = args.model_path
 model_name = args.model_name
-tokenizer = hf_tokenizer(f"{root_path}/{model_path}/{model_name}")
-# tokenizer = hf_tokenizer(f"{root_path}/{model_name}")
+port = args.port
 time_str = time.strftime("%m-%d-%H-%M", time.localtime())
-# file_name = 'game100-gsm8k-09-23-17-39.json'
-# file_name = 'Qwen2.5-1.5B-Instruct-gsm8k-09-23-17-44.json'
-# game100不使用原始prompt17-39： 0.4025, strict 0.3161
-# Game100使用原始prompt21-55：0.3321——所以改了prompt反而效果更差，，strict 0.2009
+
+# 创建模型适配器
+model_adapter = create_model_adapter(
+    model_type=model_type,
+    model_name=model_name,
+    model_path=model_path,
+    port=port
+)
 
 def load_llm():
-    os.environ["VLLM_WORKER_MULTIPROC_METHOD"] = "spawn"
-    os.environ["CUDA_VISIBLE_DEVICES"] = '0'
-    # tokenizer = AutoTokenizer.from_pretrained(config.actor_rollout_ref.model.path)
-    model = f'{root_path}/{model_path}/{model_name}'
-    # model = f"{root_path}/{model_name}"
-    # ro_config = config.actor_rollout_ref.rollout
-    llm = LLM(
-		model,
-        max_model_len=6000,
-	)
-    print("LLM initialized")
-    sampling_params = SamplingParams(
-		max_tokens=600, # ro_config.response_length,
-		temperature=0.5,  # ro_config.val_kwargs.temperature,
-	)
-    return llm, sampling_params
+    """兼容性函数，返回 model_adapter 和 None"""
+    return model_adapter, None
 
 
 def reformat_prompt(prompt0, choice):
@@ -58,10 +51,7 @@ def reformat_prompt(prompt0, choice):
         letter = string.ascii_uppercase[i]  # 依次取 A, B, C, ...
         formatted_question += f"{letter}. {option}\n"
     prompt = formatted_question + "Let\'s think step by step and always output: <think> [Your thoughts] </think> <answer> [your answer] </answer> with no extra text. Strictly follow this format. Max response length: 200 words (tokens)."
-    message = [{"role": "system", "content": "You're a helpful assistant. "},
-               {"role": "user", "content": prompt}]
-    # apply_chat_template
-    prompt = tokenizer.apply_chat_template(message, add_generation_prompt=True, tokenize=False)
+    # 注意：chat template 现在由 model_adapter 处理
     return prompt
 
 
@@ -94,15 +84,54 @@ def extract_choice(text: str):
     return None
 
 
-def test_mmlu(llm, sampling_params, mmlu):
+def test_mmlu(llm, sampling_params, mmlu, max_samples=None):
+    """测试 MMLU-Pro，使用 model_adapter 进行 API 调用"""
     answers = []
     accs = {}
     acc_list = []
-    for i in tqdm.trange(0, len(mmlu), batch_size):  # len(math['test'])
+    total_samples = min(len(mmlu), max_samples) if max_samples else len(mmlu)
+    for i in tqdm.trange(0, total_samples, batch_size):  # len(math['test'])
         # 调整prompt内容，之前的格式不太对劲，导致模型输出的最后一个数字不是最后一个数字
         data = mmlu[i: i + batch_size]
-        prompt = [reformat_prompt(data['question'][j], data['options'][j]) for j in range(len(data['question']))]# 模型推理
-        outputs = llm.generate(prompt, sampling_params)
+        prompts = [reformat_prompt(data['question'][j], data['options'][j]) for j in range(len(data['question']))]
+        
+        # 使用 model_adapter 逐个生成（API 调用不支持批量）
+        outputs = []
+        for prompt in prompts:
+            try:
+                output_text = llm.generate(
+                    prompt=prompt,
+                    max_tokens=600,
+                    temperature=0.5,
+                    use_chat_template=True
+                )
+                # 包装成类似 vLLM 输出的格式，保持兼容性
+                class FakeOutput:
+                    def __init__(self, text):
+                        self.text = text
+                    class Outputs:
+                        def __init__(self, text):
+                            self.text = text
+                    def __getattr__(self, name):
+                        if name == 'outputs':
+                            return [self.Outputs(self.text)]
+                        raise AttributeError
+                outputs.append(FakeOutput(output_text))
+            except Exception as e:
+                print(f"API 调用失败：{str(e)}")
+                # 创建一个空的输出对象
+                class FakeOutput:
+                    def __init__(self, text):
+                        self.text = text
+                    class Outputs:
+                        def __init__(self, text):
+                            self.text = text
+                    def __getattr__(self, name):
+                        if name == 'outputs':
+                            return [self.Outputs("")]
+                        raise AttributeError
+                outputs.append(FakeOutput(""))
+        
         for j, out in enumerate(outputs):
             solution = extract_solution(out.outputs[0].text)
             answers.append(out.outputs[0].text)
@@ -252,7 +281,7 @@ if __name__ == '__main__':
     mmlu_pro = load_dataset(f"{path0}/MMLU-Pro")['test']
     llm, sampling_params = load_llm()
     # exit(0)
-    answers, acc, acc_list = test_mmlu(llm, sampling_params, mmlu_pro)
+    answers, acc, acc_list = test_mmlu(llm, sampling_params, mmlu_pro, max_samples=args.max_samples)
     save_results_to_markdown(acc, model_name)
     # 保存部分测试结果，便于分析
     save_sample_results(model_name, acc_list, answers, mmlu_pro, num_samples=20)
