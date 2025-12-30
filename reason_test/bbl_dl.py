@@ -2,7 +2,6 @@
 # 参考 test_gsm8k.py 的思路：通过 API 调用 vLLM 服务
 # 支持 logical_deduction 等多项选择任务
 
-from openai import OpenAI
 import json
 import re
 import tqdm
@@ -10,19 +9,24 @@ import argparse
 import os
 import time
 from datetime import datetime
-from verl.utils import hf_tokenizer
 from pathlib import Path
+from model_adapter import create_model_adapter
 
 parser = argparse.ArgumentParser()
-parser.add_argument('--port', type=str, default="2100", help="vLLM 服务端口")
-parser.add_argument('--model_path', type=str, default="nash-new", help="模型路径（相对于 root_path）")
+parser.add_argument('--port', type=str, default="2100", help="vLLM 服务端口（仅用于 vllm 和 bbl-lite 类型）")
+parser.add_argument('--model_type', type=str, default='vllm', 
+                    choices=['deepseek', 'gemini', 'bbl-lite', 'vllm'],
+                    help="模型类型：deepseek, gemini, bbl-lite, vllm")
+parser.add_argument('--model_path', type=str, default="nash-new", help="模型路径（相对于 root_path，仅用于 vllm 和 bbl-lite）")
 parser.add_argument('--model_name', type=str, default="nash50", help="模型名称")
 parser.add_argument('--task_name', type=str, default="logical_deduction", help="BBL 任务名称")
 parser.add_argument('--task_subdir', type=str, default="five_objects", help="任务子目录（如 five_objects）")
 parser.add_argument('--task_file', type=str, default=None, help="直接指定 task.json 文件路径（可选）")
+parser.add_argument('--max_samples', type=int, default=None, help="最大测试样本数（None表示使用全部样本）")
 args = parser.parse_args()
 
 port = args.port
+model_type = args.model_type
 model_path = args.model_path
 model_name = args.model_name
 task_name = args.task_name
@@ -30,59 +34,23 @@ task_subdir = args.task_subdir
 task_file = args.task_file
 
 root_path = '/root/autodl-tmp'
-# 尝试初始化 tokenizer，如果路径不存在则使用备用模型
-try:
-    if model_path:
-        tokenizer_path = f"{root_path}/{model_path}/{model_name}"
-    else:
-        tokenizer_path = f"{root_path}/{model_name}"
-    # 检查路径是否存在
-    if os.path.exists(tokenizer_path):
-        tokenizer = hf_tokenizer(tokenizer_path)
-    else:
-        # 如果路径不存在，使用 Qwen2.5-1.5B-Instruct 
-        print(f"模型路径不存在 {tokenizer_path}，使用备用 tokenizer: Qwen2.5-1.5B-Instruct")
-        tokenizer = hf_tokenizer(f"{root_path}/Qwen2.5-1.5B-Instruct")
-except Exception as e:
-    # 如果初始化失败，使用备用模型
-    print(f"tokenizer 初始化失败: {e}，使用备用 tokenizer: Qwen2.5-1.5B-Instruct")
-    tokenizer = hf_tokenizer(f"{root_path}/Qwen2.5-1.5B-Instruct")
 
-# 禁用代理（只在本脚本有效）
-for key in ["http_proxy", "https_proxy", "all_proxy", 
-            "HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY"]:
-    os.environ.pop(key, None)
-
-# 配置 OpenAI 客户端（兼容 vLLM 的 OpenAPI 接口）
-client = OpenAI(
-    api_key="EMPTY",  # vLLM 无需认证密钥，任意字符串均可
-    base_url=f"http://localhost:{port}/v1"  # 与 vLLM 服务端口一致
+# 创建模型适配器
+model_adapter = create_model_adapter(
+    model_type=model_type,
+    model_name=model_name,
+    model_path=model_path,
+    port=port
 )
 
 def llm_output(text: str) -> str:
-    """通过 API 调用模型获取输出（参考 test_gsm8k.py）"""
-    try:
-        message = [
-            {"role": "system", "content": "You're a helpful assistant."},
-            {"role": "user", "content": text}
-        ]
-        prompt = tokenizer.apply_chat_template(message, add_generation_prompt=True, tokenize=False)
-        
-        # 构建模型路径（处理空路径的情况）
-        if model_path:
-            model_full_path = f"{root_path}/{model_path}/{model_name}"
-        else:
-            model_full_path = f"{root_path}/{model_name}"
-        
-        response = client.completions.create(
-            model=model_full_path,
-            prompt=prompt,
-            max_tokens=600,
-            temperature=0.5,
-        )
-        return response.choices[0].text
-    except Exception as e:
-        raise RuntimeError(f"API 调用失败：{str(e)}")
+    """通过模型适配器调用模型获取输出"""
+    return model_adapter.generate(
+        prompt=text,
+        max_tokens=600,
+        temperature=0.5,
+        use_chat_template=True
+    )
 
 def load_task_json(task_file_path: str) -> dict:
     """加载 task.json 文件"""
@@ -146,7 +114,7 @@ def extract_answer(solution_str: str, num_choices: int, choices_are_numeric: boo
     
     return None
 
-def test_bbl(task_data: dict):
+def test_bbl(task_data: dict, max_samples=None):
     """
     评测 BBL 任务（参考 test_gsm8k.py 的 test_math 函数）
     """
@@ -166,7 +134,8 @@ def test_bbl(task_data: dict):
         num_choices = 4
         choices_are_numeric = False
     
-    for i in tqdm.trange(len(examples)):
+    num_samples = min(len(examples), max_samples) if max_samples else len(examples)
+    for i in tqdm.trange(num_samples):
         example = examples[i]
         
         # 格式化 prompt
@@ -235,12 +204,16 @@ if __name__ == '__main__':
     print(f"任务名称: {task_data.get('name', 'Unknown')}")
     print(f"任务描述: {task_data.get('description', 'N/A')[:100]}...")
     print(f"测试样本数: {len(task_data.get('examples', []))}")
-    print(f"vLLM 服务端口: {port}")
-    print(f"模型路径: {root_path}/{model_path}/{model_name}")
+    print(f"模型类型: {model_type}")
+    if model_type in ['vllm', 'bbl-lite']:
+        print(f"vLLM 服务端口: {port}")
+        print(f"模型路径: {root_path}/{model_path}/{model_name}" if model_path else f"模型路径: {root_path}/{model_name}")
+    else:
+        print(f"模型名称: {model_name}")
     print("\n开始评测...")
     
     # 运行评测
-    accs, answers = test_bbl(task_data)
+    accs, answers = test_bbl(task_data, max_samples=args.max_samples)
     
     # 计算准确率
     total = len(accs)

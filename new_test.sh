@@ -21,6 +21,8 @@ do
     python reason_test/social.py --model_path $MODEL_PATH --model_name $MODEL_NAME
     # common test
     python reason_test/common.py --model_path $MODEL_PATH --model_name $MODEL_NAME
+    # bbl test
+    python reason_test/bbl_dl.py --model_path $MODEL_PATH --model_name $MODEL_NAME --task_name logical_deduction --task_subdir five_objects
 done
 
 echo "✅ All models tested successfully."

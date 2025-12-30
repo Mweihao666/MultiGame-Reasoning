@@ -1,4 +1,3 @@
-from openai import OpenAI
 import datasets
 import re
 import tqdm
@@ -7,49 +6,40 @@ import argparse
 import os
 import time
 from datetime import datetime
-from verl.utils import hf_tokenizer
-
+from model_adapter import create_model_adapter
 
 parser = argparse.ArgumentParser()
-parser.add_argument('--port', type=str, default="2100")
-# tictactoe/grpo/game_200
-# Qwen2.5-1.5B-Instruct
-parser.add_argument('--model_name', type=str, default='game100')
-# model_name = 'Qwen3-1.7B'
+parser.add_argument('--port', type=str, default="2100", help="vLLM 服务端口（仅用于 vllm 和 bbl-lite 类型）")
+parser.add_argument('--model_type', type=str, default='vllm', 
+                    choices=['deepseek', 'gemini', 'bbl-lite', 'vllm'],
+                    help="模型类型：deepseek, gemini, bbl-lite, vllm")
+parser.add_argument('--model_name', type=str, default='game100', help="模型名称")
+parser.add_argument('--model_path', type=str, default='tictactoe-gemini', help="模型路径（相对于 root_path，仅用于 vllm 和 bbl-lite）")
+parser.add_argument('--max_samples', type=int, default=None, help="最大测试样本数（None表示使用全部样本）")
 args = parser.parse_args()
 
 port = args.port
+model_type = args.model_type
 model_name = args.model_name
-model_folder = 'tictactoe-gemini'
-root_path = '/root/autodl-tmp'# '/data1/lvnuoyan'
-# tokenizer = hf_tokenizer(f"{root_path}/llm_model/{model_name}")
-tokenizer = hf_tokenizer(f"{root_path}/{model_folder}/{model_name}")
-# 禁用代理（只在本脚本有效）——服务器联网有问题，这样保证正常访问VLLM load的模型
-for key in ["http_proxy", "https_proxy", "all_proxy", 
-            "HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY"]:
-    os.environ.pop(key, None)
+model_path = args.model_path
+root_path = '/root/autodl-tmp'
 
-# 配置 OpenAI 客户端（兼容 vLLM 的 OpenAPI 接口）
-client = OpenAI(
-    api_key="EMPTY",  # vLLM 无需认证密钥，任意字符串均可
-    base_url=f"http://localhost:{port}/v1"  # 与 vLLM 服务端口一致 3333没人用之后我都用这个端口吧
+# 创建模型适配器
+model_adapter = create_model_adapter(
+    model_type=model_type,
+    model_name=model_name,
+    model_path=model_path,
+    port=port
 )
 
 def llm_output(text: str) -> str:
-    try:
-        message = [{"role": "system", "content": "You're a helpful assistant. "},
-                   {"role": "user", "content": text}]
-        prompt = tokenizer.apply_chat_template(message, add_generation_prompt=True, tokenize=False)
-        response = client.completions.create(
-            model=f"{root_path}/{model_folder}/{model_name}",
-            prompt=prompt,
+    """通过模型适配器调用模型获取输出"""
+    return model_adapter.generate(
+        prompt=text,
             max_tokens=1000,
             temperature=0.5,
+        use_chat_template=True
         )
-        # print(response.choices[0].text)
-        return response.choices[0].text
-    except Exception as e:
-        raise RuntimeError(f"API 调用失败：{str(e)}")
 
 def reformat_prompt(prompt0):
     # 将prompt句子末尾的 Let\'s think step by step and output the final answer after "####".
@@ -57,10 +47,8 @@ def reformat_prompt(prompt0):
     # <think> [your thought] </think> <answer> [your answer] </answer>
     prompt = prompt0.replace("Let\'s think step by step and output the final answer after \"####\".", 
                              "Always output: <think> [Your thoughts] </think> <answer> [your answer] </answer> with no extra text. Strictly follow this format. Max response length: 200 words (tokens).")
-    message = [{"role": "system", "content": "You're a helpful assistant. "},
-               {"role": "user", "content": prompt}]
-    # apply_chat_template
-    prompt = tokenizer.apply_chat_template(message, add_generation_prompt=True, tokenize=False)
+    # 注意：对于 API 模型（deepseek, gemini），prompt 直接作为 user message
+    # 对于本地模型（vllm, bbl-lite），model_adapter 会应用 chat template
     return prompt
 
 def extract_solution(solution_str, method="strict"):
@@ -92,10 +80,11 @@ def extract_solution(solution_str, method="strict"):
     return final_answer
 
 
-def test_math(method='strict'):
+def test_math(method='strict', max_samples=None):
     accs = []
     answers = []
-    for i in tqdm.trange(len(math['test'])):  # len(math['test'])
+    num_samples = min(len(math['test']), max_samples) if max_samples else len(math['test'])
+    for i in tqdm.trange(num_samples):  # len(math['test'])
         # 调整prompt内容，之前的格式不太对劲
         q = math['test']['prompt'][i][0]['content']
         q = reformat_prompt(q)
@@ -124,7 +113,7 @@ math = datasets.load_dataset("parquet",
 # print(math['test']['prompt'][0])
 
 # exit(0)
-accs, answers = test_math('strict')
+accs, answers = test_math('strict', max_samples=args.max_samples)
 acc0 = accs.count(1) / len(accs)
 print('total acc:', acc0)
 print('invalid output:', accs.count(None))
