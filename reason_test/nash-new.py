@@ -1,8 +1,6 @@
 # NashEnv evaluation script using vLLM-served model
 import sys
 import os
-# 添加项目根目录到 Python 路径
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from ragen.env.nash_new.env import NashNew
 from ragen.env.nash_new.config import NashNewConfig
 import json
@@ -12,43 +10,49 @@ from tqdm import trange
 import random
 from collections import Counter
 import argparse
-from model_adapter import create_model_adapter
+from vllm import LLM, SamplingParams
+from verl.utils import hf_tokenizer
 
 # Setup
 root_path = '/root/autodl-tmp'
 test_round = 100
 
 parser = argparse.ArgumentParser()
-parser.add_argument("--model_type", type=str, default='vllm', 
-                    choices=['deepseek', 'gemini', 'bbl-lite', 'vllm'])
 parser.add_argument("--model_path", type=str, default="nash-new")
 parser.add_argument("--model_name", type=str, default='Qwen2.5-1.5B-Instruct')
-parser.add_argument("--port", type=str, default="2100", help="vLLM 服务端口（仅用于 vllm 和 bbl-lite 类型）")
-parser.add_argument("--max_rounds", type=int, default=None, help="最大测试轮数（None表示使用默认轮数）")
 args = parser.parse_args()
 
-model_type = args.model_type
 model_path = args.model_path
 model_name = args.model_name
-port = args.port
-
-# 创建模型适配器
-model_adapter = create_model_adapter(
-    model_type=model_type,
-    model_name=model_name,
-    model_path=model_path,
-    port=port
-)
+tokenizer = hf_tokenizer(f"{root_path}/{model_path}/{model_name}")
+# tokenizer = hf_tokenizer(f"{root_path}/{model_name}")
 
 def load_llm():
-    """兼容性函数，返回 model_adapter 和 None"""
-    return model_adapter, None
+    os.environ["VLLM_WORKER_MULTIPROC_METHOD"] = "spawn"
+    os.environ["CUDA_VISIBLE_DEVICES"] = '0'
+    # tokenizer = AutoTokenizer.from_pretrained(config.actor_rollout_ref.model.path)
+    model = f'{root_path}/{model_path}/{model_name}'
+    # model = f"{root_path}/{model_name}"
+    # ro_config = config.actor_rollout_ref.rollout
+    llm = LLM(
+		model,
+        max_model_len=6000,
+	)
+    print("LLM initialized")
+    sampling_params = SamplingParams(
+		max_tokens=600, # ro_config.response_length,
+		temperature=0.5,  # ro_config.val_kwargs.temperature,
+	)
+    return llm, sampling_params
 
 def reformat_prompt(prompt0):
     # Append fixed instruction suffix (no chat template, plain concatenation)
     # Guide model to analyze payoffs without mentioning "Nash equilibrium"
     prompt = prompt0 + "Let\'s think step by step and always output: <think> [Your thoughts] </think> <answer> [your answer] </answer> with no extra text. Strictly follow this format. Max response length: 200 words (tokens)."
-    # 注意：chat template 现在由 model_adapter 处理
+    message = [{"role": "system", "content": "You're a helpful assistant. "},
+               {"role": "user", "content": prompt}]
+    # apply_chat_template
+    prompt = tokenizer.apply_chat_template(message, add_generation_prompt=True, tokenize=False)
     return prompt
 
 def extract_action(output):
@@ -75,31 +79,13 @@ if __name__ == '__main__':
     info_list = []
     run_details = []  # For saving detailed run info
     llm, sampling_params = load_llm()
-    actual_rounds = args.max_rounds if args.max_rounds else test_round
-    for t in trange(actual_rounds):
+    for t in trange(test_round):
         seed = random.randint(1, 1000)
         prompt = env.reset(seed=seed)
         # Format prompt with instruction suffix
         formatted_prompt = reformat_prompt(prompt)
-        # 打印输入（用于检查）
-        print(f"\n=== Round {t+1} ===")
-        print(f"Input (env.render()):\n{prompt}\n")
-        print(f"Formatted Input (with format prompt):\n{formatted_prompt[:500]}...\n")
-        # 使用 model_adapter 生成
-        output = llm.generate(
-            prompt=formatted_prompt,
-            max_tokens=3000,
-            temperature=0.5,
-            use_chat_template=True
-        )
-        # 打印输出（用于检查）
-        print(f"Output (API response):\n{output}\n")
-        print(f"Output length: {len(output)} characters\n")
-        # 检查是否包含结束标签
-        if '</think>' not in output:
-            print("⚠️  警告: 输出中缺少 </think> 标签")
-        if '</answer>' not in output:
-            print("⚠️  警告: 输出中缺少 </answer> 标签")
+        outputs = llm.generate([formatted_prompt], sampling_params)
+        output = outputs[0].outputs[0].text
         # Extract action from output
         action_str = extract_action(output)
         if action_str is None:
