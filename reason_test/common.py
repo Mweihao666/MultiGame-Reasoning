@@ -141,7 +141,9 @@ def parse_result(result_str):
 
 
 def reformat_prompt(prompt0):
-
+    # 将prompt句子末尾的 Let\'s think step by step and output the final answer after "####".
+    # 替换为Let\'s think step by step and output your think and final answer in this format: 
+    # <think> [your thought] </think> <answer> [your answer] </answer>
     formatted_question = prompt0
     prompt = formatted_question + "Let\'s think step by step and always output: <think> [Your thoughts] </think> <answer> [your answer] </answer> with no extra text. Strictly follow this format. Max response length: 200 words (tokens)."
     # 注意：chat template 现在由 model_adapter 处理
@@ -193,7 +195,7 @@ def test_gen(llm, sampling_params, dataset, max_samples=None):
                         self.outputs = [FakeOutput(text)]
                 outputs.append(FakeRequestOutput(output_text))
             except Exception as e:
-                print(f"  生成失败: {e}")
+                print(f"⚠️  生成失败: {e}")
                 outputs.append(FakeRequestOutput(""))
         
         for j, out in enumerate(outputs):

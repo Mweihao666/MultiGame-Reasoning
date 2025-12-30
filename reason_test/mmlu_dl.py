@@ -43,6 +43,9 @@ def load_llm():
 
 
 def reformat_prompt(prompt0, choice):
+    # 将prompt句子末尾的 Let\'s think step by step and output the final answer after "####".
+    # 替换为Let\'s think step by step and output your think and final answer in this format: 
+    # <think> [your thought] </think> <answer> [your answer] </answer>
     formatted_question = (
         prompt0.strip() + "\n"
         + f"A. {choice[0]}\n"
@@ -114,7 +117,7 @@ def test_mmlu(llm, sampling_params, mmlu, num_samples=5, max_samples=None):
                         self.outputs = [FakeOutput(text)]
                 outputs.append(FakeRequestOutput(output_text))
             except Exception as e:
-                print(f"  生成失败: {e}")
+                print(f"⚠️  生成失败: {e}")
                 outputs.append(FakeRequestOutput(""))
         
         for j, out in enumerate(outputs):
@@ -253,7 +256,7 @@ def save_sample_results(model_name, acc_list, answers, mmlu_data,
     with open(output_file, "w") as f:
         json.dump(samples, f, indent=4)
     
-    print(f" Sample results saved to {output_file}")
+    print(f"✅ Sample results saved to {output_file}")
     print(f"Saved {len(correct_indices)} correct, {len(incorrect_indices)} incorrect and {len(invalid_indices)} invalid samples")
 
 

@@ -97,9 +97,9 @@ if __name__ == '__main__':
         print(f"Output length: {len(output)} characters\n")
         # 检查是否包含结束标签
         if '</think>' not in output:
-            print("  警告: 输出中缺少 </think> 标签")
+            print("⚠️  警告: 输出中缺少 </think> 标签")
         if '</answer>' not in output:
-            print(" 警告: 输出中缺少 </answer> 标签")
+            print("⚠️  警告: 输出中缺少 </answer> 标签")
         # Extract action from output
         action_str = extract_action(output)
         if action_str is None:
