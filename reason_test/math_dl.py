@@ -41,9 +41,7 @@ def load_llm():
 
 
 def reformat_prompt(prompt0):
-    # 将prompt句子末尾的 Let\'s think step by step and output the final answer after "####".
-    # 替换为Let\'s think step by step and output your think and final answer in this format: 
-    # <think> [your thought] </think> <answer> [your answer] </answer>
+
     prompt = prompt0.replace("Let\'s think step by step and output the final answer after \"####\".", 
                              "Let\'s think step by step and always output: <think> [Your thoughts] </think> <answer> [your answer] </answer> with no extra text. Strictly follow this format. Max response length: 200 words (tokens).")
     # 注意：chat template 现在由 model_adapter 处理
@@ -94,7 +92,7 @@ def test_math(llm, sampling_params, math, max_samples=None):
                         self.outputs = [FakeOutput(text)]
                 outputs.append(FakeRequestOutput(output_text))
             except Exception as e:
-                print(f"⚠️  生成失败: {e}")
+                print(f" 生成失败: {e}")
                 outputs.append(FakeRequestOutput(""))
         
         for j, out in enumerate(outputs):
@@ -135,7 +133,7 @@ def save_log(model_name, accs_strict, accs_flex, output_file="reason_test/gsm8k-
         f.write("flexible mode\n")
         f.write(f"total acc: {acc0_flex:.4f}\n")
 
-    print(f"✅ Log saved to {output_file}")
+    print(f" Log saved to {output_file}")
 
 
 def save_sample_results(model_name, accs_strict, accs_flex, answers, math_data, 

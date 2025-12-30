@@ -49,9 +49,6 @@ def load_llm():
 
 
 def reformat_prompt(prompt0, choice):
-    # 将prompt句子末尾的 Let\'s think step by step and output the final answer after "####".
-    # 替换为Let\'s think step by step and output your think and final answer in this format: 
-    # <think> [your thought] </think> <answer> [your answer] </answer>
     formatted_question = (
         prompt0.strip() + "\n"
         + f"A. {choice[0]}\n"
@@ -128,7 +125,7 @@ def test_social(llm, sampling_params, social, ground_truth, max_samples=None):
                         self.outputs = [FakeOutput(text)]
                 outputs.append(FakeRequestOutput(output_text))
             except Exception as e:
-                print(f"⚠️  生成失败: {e}")
+                print(f"  生成失败: {e}")
                 outputs.append(FakeRequestOutput(""))
         
         for j, out in enumerate(outputs):
@@ -232,7 +229,7 @@ def save_sample_results(model_name, acc_list, answers, social, ground_truth,
     with open(output_file, "w") as f:
         json.dump(samples, f, indent=4)
     
-    print(f"✅ Sample results saved to {output_file}")
+    print(f" Sample results saved to {output_file}")
     print(f"Saved {len(correct_indices)} correct, {len(incorrect_indices)} incorrect and {len(invalid_indices)} invalid samples")
 
 
@@ -248,7 +245,7 @@ def save_log(model_name, accs_list, output_file="reason_test/socialIQA-log.txt")
         f.write(f"total acc: {acc0_strict:.4f}\n")
         f.write(f"invalid output: {invalid_strict}\n")
 
-    print(f"✅ Log saved to {output_file}")
+    print(f" Log saved to {output_file}")
 
 
 if __name__ == '__main__':

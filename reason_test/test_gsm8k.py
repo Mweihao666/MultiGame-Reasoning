@@ -42,9 +42,6 @@ def llm_output(text: str) -> str:
         )
 
 def reformat_prompt(prompt0):
-    # 将prompt句子末尾的 Let\'s think step by step and output the final answer after "####".
-    # 替换为Let\'s think step by step and output your think and final answer in this format: 
-    # <think> [your thought] </think> <answer> [your answer] </answer>
     prompt = prompt0.replace("Let\'s think step by step and output the final answer after \"####\".", 
                              "Always output: <think> [Your thoughts] </think> <answer> [your answer] </answer> with no extra text. Strictly follow this format. Max response length: 200 words (tokens).")
     # 注意：对于 API 模型（deepseek, gemini），prompt 直接作为 user message
