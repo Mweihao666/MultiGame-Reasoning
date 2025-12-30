@@ -1,4 +1,8 @@
 # 参考tictactoe测试代码生成undercover测试代码
+import sys
+import os
+# 添加项目根目录到 Python 路径
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from ragen.env.undercover.config import UndercoverEnvConfig
 from ragen.env.undercover.env import UndercoverEnv
 # 根据infer得到的结果，运行函数提取模型生成的信息
@@ -10,9 +14,8 @@ from tqdm import trange
 import random
 import os, logging
 from collections import Counter
-from vllm import LLM, SamplingParams
-from verl.utils import hf_tokenizer
 import argparse
+from model_adapter import create_model_adapter
 
 root_path = '/root/autodl-tmp'  # '/data1/lvnuoyan' 
 test_round = 100
@@ -26,31 +29,29 @@ config = UndercoverEnvConfig(
     ]
 )
 parser = argparse.ArgumentParser()
+parser.add_argument("--model_type", type=str, default='vllm', 
+                    choices=['deepseek', 'gemini', 'bbl-lite', 'vllm'])
 parser.add_argument("--model_path", type=str, default="undercover")
 parser.add_argument("--model_name", type=str, default="Qwen2.5-1.5B-Instruct")
+parser.add_argument("--port", type=str, default="2100", help="vLLM 服务端口（仅用于 vllm 和 bbl-lite 类型）")
+parser.add_argument("--max_rounds", type=int, default=None, help="最大测试轮数（None表示使用默认轮数）")
 args = parser.parse_args()
+model_type = args.model_type
 model_path = args.model_path
 model_name = args.model_name
-tokenizer = hf_tokenizer(f"{root_path}/{model_path}/{model_name}")
-# tokenizer = hf_tokenizer(f"{root_path}/{model_name}")
+port = args.port
+
+# 创建模型适配器
+model_adapter = create_model_adapter(
+    model_type=model_type,
+    model_name=model_name,
+    model_path=model_path,
+    port=port
+)
 
 def load_llm():
-    os.environ["VLLM_WORKER_MULTIPROC_METHOD"] = "spawn"
-    os.environ["CUDA_VISIBLE_DEVICES"] = '0'
-    # tokenizer = AutoTokenizer.from_pretrained(config.actor_rollout_ref.model.path)
-    model = f'{root_path}/{model_path}/{model_name}'
-    # model = f"{root_path}/{model_name}"
-    # ro_config = config.actor_rollout_ref.rollout
-    llm = LLM(
-		model,
-        max_model_len=8000,
-	)
-    print("LLM initialized")
-    sampling_params = SamplingParams(
-		max_tokens=600, # ro_config.response_length,
-		temperature=0.5,  # ro_config.val_kwargs.temperature,
-	)
-    return llm, sampling_params
+    """兼容性函数，返回 model_adapter 和 None"""
+    return model_adapter, None
 
 
 def reformat_prompt(prompt0):
@@ -58,35 +59,54 @@ def reformat_prompt(prompt0):
     # 替换为Let\'s think step by step and output your think and final answer in this format: 
     # <think> [your thought] </think> <answer> [your answer] </answer>
     prompt = prompt0 + "Let\'s think step by step and always output: <think> [Your thoughts] </think> <answer> [your answer] </answer> with no extra text. Strictly follow this format. Max response length: 200 words (tokens)."
-    message = [{"role": "system", "content": "You're a helpful assistant. "},
-               {"role": "user", "content": prompt}]
-    # apply_chat_template
-    prompt = tokenizer.apply_chat_template(message, add_generation_prompt=True, tokenize=False)
+    # 注意：chat template 现在由 model_adapter 处理
     return prompt
 
 if __name__ == '__main__':
     llm, sampling_params = load_llm()
     env = UndercoverEnv(config=config)
     info_list = []
-    for t in trange(100):
+    actual_rounds = args.max_rounds if args.max_rounds else test_round
+    for t in trange(actual_rounds):
         env.reset(seed=random.randint(1, 1000))
         # 游戏进行
         prompt = env.render()
+        turn = 0
         while True:
-            # print(prompt + prompt0)
+            turn += 1
+            # 打印输入（用于检查）
+            print(f"\n=== Round {t+1}, Turn {turn} ===")
+            print(f"Input (env.render()):\n{prompt}\n")
             # 得到trainer的行动
-            prompt = reformat_prompt(prompt)
-            # print(prompt)
-            outputs = llm.generate([prompt], sampling_params)
-            output = outputs[0].outputs[0].text
-            # print(output)
+            formatted_prompt = reformat_prompt(prompt)
+            print(f"Formatted Input (with format prompt):\n{formatted_prompt[:500]}...\n")
+            # 使用 model_adapter 生成
+            output = llm.generate(
+                prompt=formatted_prompt,
+                max_tokens=2000,
+                temperature=0.5,
+                use_chat_template=True
+            )
+            # 打印输出（用于检查）
+            print(f"Output (API response):\n{output}\n")
+            # 去掉输出末尾的空白字符，避免匹配失败
+            output_stripped = output.strip()
+            # 首先尝试完整格式匹配
             pattern = r'.*<think>(.*?)</think>\s*<answer>(.*?)</answer>$'
-            match = re.match(pattern, output, re.DOTALL)
+            match = re.match(pattern, output_stripped, re.DOTALL)
             if not match:
-                info_list.append('trainer-invalid-format')
-                print('trainer-invalid-format')
-                break
-            action = match.group(2)
+                # 如果完整格式匹配失败，尝试只匹配answer标签（处理输出被截断的情况）
+                answer_pattern = r'<answer>(.*?)</answer>'
+                answer_match = re.search(answer_pattern, output_stripped, re.DOTALL)
+                if answer_match:
+                    action = answer_match.group(1).strip()
+                    print(f"⚠️  警告: 输出格式不完整（缺少think标签），但已提取答案: {action}")
+                else:
+                    info_list.append('trainer-invalid-format')
+                    print('trainer-invalid-format')
+                    break
+            else:
+                action = match.group(2).strip()
             # 更新环境信息，得到对手操作以及下一步信息
             prompt, reward, done, info = env.step(action)
             # print(reward, done, info)
