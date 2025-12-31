@@ -15,7 +15,7 @@ import random
 import os, logging
 from collections import Counter
 import argparse
-from model_adapter import create_model_adapter
+from ragen.env.base import EnvPlayer
 
 root_path = '/root/autodl-tmp'  # '/data1/lvnuoyan' 
 test_round = 100
@@ -23,35 +23,44 @@ config = UndercoverEnvConfig(
     max_env_try=1,  # 修改最大尝试次数
     player_info=[
         # 固定对手gemini-2.5-flash
-        {'model_name': 'gemini-2.5-flash-nothinking'},
-        {'model_name': 'gemini-2.5-flash-nothinking'},
-        {'model_name': 'gemini-2.5-flash-nothinking'}
+        {'model_name': 'google/gemini-2.5-flash-nothinking'},
+        {'model_name': 'google/gemini-2.5-flash-nothinking'},
+        {'model_name': 'google/gemini-2.5-flash-nothinking'}
     ]
 )
 parser = argparse.ArgumentParser()
-parser.add_argument("--model_type", type=str, default='vllm', 
-                    choices=['deepseek', 'gemini', 'bbl-lite', 'vllm'])
-parser.add_argument("--model_path", type=str, default="undercover")
-parser.add_argument("--model_name", type=str, default="Qwen2.5-1.5B-Instruct")
-parser.add_argument("--port", type=str, default="2100", help="vLLM 服务端口（仅用于 vllm 和 bbl-lite 类型）")
+parser.add_argument("--model_name", type=str, default='google/gemini-2.5-flash-nothinking', 
+                    help="模型名称，支持 gemini (google/gemini-2.5-flash-nothinking) 或 gpt-4o")
 parser.add_argument("--max_rounds", type=int, default=None, help="最大测试轮数（None表示使用默认轮数）")
+parser.add_argument("--max_tokens", type=int, default=2000, help="最大生成 token 数")
 args = parser.parse_args()
-model_type = args.model_type
-model_path = args.model_path
 model_name = args.model_name
-port = args.port
 
-# 创建模型适配器
-model_adapter = create_model_adapter(
-    model_type=model_type,
-    model_name=model_name,
-    model_path=model_path,
-    port=port
-)
+# 创建 EnvPlayer（用于 API 调用）
+env_player = EnvPlayer(2, {'model_name': model_name}, max_tokens=args.max_tokens)
+
+def llm_output(text: str) -> str:
+    """通过 EnvPlayer 调用模型获取输出，失败时重试直到成功"""
+    retries = 0
+    while True:
+        try:
+            output = env_player.act(text, 0)
+            if output:  # 如果返回非空字符串，认为成功
+                return output
+            else:
+                retries += 1
+                wait_time = min(2 ** retries, 30)  # 指数退避，最多等待30秒
+                print(f"  API 返回空结果，{wait_time} 秒后重试 (第 {retries} 次)...")
+                time.sleep(wait_time)
+        except Exception as e:
+            retries += 1
+            wait_time = min(2 ** retries, 30)  # 指数退避，最多等待30秒
+            print(f"  API 调用失败: {e}，{wait_time} 秒后重试 (第 {retries} 次)...")
+            time.sleep(wait_time)
 
 def load_llm():
-    """兼容性函数，返回 model_adapter 和 None"""
-    return model_adapter, None
+    """兼容性函数，返回 env_player 和 None"""
+    return env_player, None
 
 
 def reformat_prompt(prompt0):
@@ -80,13 +89,8 @@ if __name__ == '__main__':
             # 得到trainer的行动
             formatted_prompt = reformat_prompt(prompt)
             print(f"Formatted Input (with format prompt):\n{formatted_prompt[:500]}...\n")
-            # 使用 model_adapter 生成
-            output = llm.generate(
-                prompt=formatted_prompt,
-                max_tokens=2000,
-                temperature=0.5,
-                use_chat_template=True
-            )
+            # 使用 EnvPlayer 生成（llm_output 内部已处理重试）
+            output = llm_output(formatted_prompt)
             # 打印输出（用于检查）
             print(f"Output (API response):\n{output}\n")
             # 去掉输出末尾的空白字符，避免匹配失败
@@ -100,7 +104,7 @@ if __name__ == '__main__':
                 answer_match = re.search(answer_pattern, output_stripped, re.DOTALL)
                 if answer_match:
                     action = answer_match.group(1).strip()
-                    print(f"⚠️  警告: 输出格式不完整（缺少think标签），但已提取答案: {action}")
+                    print(f" 警告: 输出格式不完整（缺少think标签），但已提取答案: {action}")
                 else:
                     info_list.append('trainer-invalid-format')
                     print('trainer-invalid-format')

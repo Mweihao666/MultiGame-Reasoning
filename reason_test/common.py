@@ -11,32 +11,43 @@ import re
 import os
 import logging
 import time
-from model_adapter import create_model_adapter
+import sys
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+from ragen.env.base import EnvPlayer
 
 root_path = '/root/autodl-tmp'
 llm_judge = 'gpt-4o'
 batch_size = 16
 
 parser = argparse.ArgumentParser()
-parser.add_argument("--model_type", type=str, default='vllm', 
-                    choices=['deepseek', 'gemini', 'bbl-lite', 'vllm'])
-parser.add_argument("--model_path", type=str, default="nash-math")
-parser.add_argument("--model_name", type=str, default="nm150")
-parser.add_argument("--port", type=str, default="2100", help="vLLM 服务端口（仅用于 vllm 和 bbl-lite 类型）")
+parser.add_argument("--model_name", type=str, default="google/gemini-2.5-flash-nothinking", 
+                    help="模型名称，支持 gemini (google/gemini-2.5-flash-nothinking) 或 gpt-4o")
 parser.add_argument("--max_samples", type=int, default=None, help="最大测试样本数（None表示使用全部样本）")
+parser.add_argument("--max_tokens", type=int, default=600, help="最大生成 token 数")
 args = parser.parse_args()
-model_type = args.model_type
-model_path = args.model_path
 model_name = args.model_name
-port = args.port
 
-# 创建模型适配器
-model_adapter = create_model_adapter(
-    model_type=model_type,
-    model_name=model_name,
-    model_path=model_path,
-    port=port
-)
+# 创建 EnvPlayer（用于 API 调用）
+env_player = EnvPlayer(2, {'model_name': model_name}, max_tokens=args.max_tokens)
+
+def llm_output(text: str) -> str:
+    """通过 EnvPlayer 调用模型获取输出，失败时重试直到成功"""
+    retries = 0
+    while True:
+        try:
+            output = env_player.act(text, 0)
+            if output:  # 如果返回非空字符串，认为成功
+                return output
+            else:
+                retries += 1
+                wait_time = min(2 ** retries, 30)  # 指数退避，最多等待30秒
+                print(f"⚠️  API 返回空结果，{wait_time} 秒后重试 (第 {retries} 次)...")
+                time.sleep(wait_time)
+        except Exception as e:
+            retries += 1
+            wait_time = min(2 ** retries, 30)  # 指数退避，最多等待30秒
+            print(f"⚠️  API 调用失败: {e}，{wait_time} 秒后重试 (第 {retries} 次)...")
+            time.sleep(wait_time)
 
 '''
 400条数据，json文件
@@ -54,8 +65,8 @@ print('delete no human_annotations data')
 dataset = [data for data in dataset if len(data['human_annotations']) > 0]
 
 def load_llm():
-    """兼容性函数，返回 model_adapter 和 None"""
-    return model_adapter, None
+    """兼容性函数，返回 env_player 和 None"""
+    return env_player, None
 
 class ThreadSafeCycle:
     def __init__(self, iterable):
@@ -176,27 +187,18 @@ def test_gen(llm, sampling_params, dataset, max_samples=None):
         '''
         prompts = [reformat_prompt(data[j]['instruction']) for j in range(len(data))]
         
-        # 使用 model_adapter 逐个生成（API 调用不支持批量）
+        # 使用 EnvPlayer 逐个生成（API 调用不支持批量，llm_output 内部已处理重试）
         outputs = []
         for prompt in prompts:
-            try:
-                output_text = llm.generate(
-                    prompt=prompt,
-                    max_tokens=600,
-                    temperature=0.5,
-                    use_chat_template=True
-                )
-                # 包装成类似 vLLM 输出的格式，保持兼容性
-                class FakeOutput:
-                    def __init__(self, text):
-                        self.text = text
-                class FakeRequestOutput:
-                    def __init__(self, text):
-                        self.outputs = [FakeOutput(text)]
-                outputs.append(FakeRequestOutput(output_text))
-            except Exception as e:
-                print(f"⚠️  生成失败: {e}")
-                outputs.append(FakeRequestOutput(""))
+            output_text = llm_output(prompt)
+            # 包装成类似 vLLM 输出的格式，保持兼容性
+            class FakeOutput:
+                def __init__(self, text):
+                    self.text = text
+            class FakeRequestOutput:
+                def __init__(self, text):
+                    self.outputs = [FakeOutput(text)]
+            outputs.append(FakeRequestOutput(output_text))
         
         for j, out in enumerate(outputs):
             # answer, choices, subject
@@ -307,7 +309,7 @@ def save_sample_results(model_name, acc_list, answers, dataset,
     with open(output_file, "w") as f:
         json.dump(samples, f, indent=4)
     
-    print(f"✅ Sample results saved to {output_file}")
+    print(f" Sample results saved to {output_file}")
     print(f"Saved {len(correct_indices)} correct, {len(incorrect_indices)} incorrect and {len(invalid_indices)} invalid samples")
 
 
@@ -322,7 +324,7 @@ def save_log(model_name, accs_list, output_file="reason_test/commongen-log.txt")
         f.write("common_gen test set\n")
         f.write(f"total win-tie: {acc0_strict:.4f}\n")
         f.write(f"invalid output: {invalid_strict}\n")
-    print(f"✅ Log saved to {output_file}")
+    print(f" Log saved to {output_file}")
 
 
 if __name__ == '__main__':

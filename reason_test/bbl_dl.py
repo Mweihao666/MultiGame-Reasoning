@@ -10,24 +10,20 @@ import os
 import time
 from datetime import datetime
 from pathlib import Path
-from model_adapter import create_model_adapter
+import sys
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+from ragen.env.base import EnvPlayer
 
 parser = argparse.ArgumentParser()
-parser.add_argument('--port', type=str, default="2100", help="vLLM 服务端口（仅用于 vllm 和 bbl-lite 类型）")
-parser.add_argument('--model_type', type=str, default='vllm', 
-                    choices=['deepseek', 'gemini', 'bbl-lite', 'vllm'],
-                    help="模型类型：deepseek, gemini, bbl-lite, vllm")
-parser.add_argument('--model_path', type=str, default="nash-new", help="模型路径（相对于 root_path，仅用于 vllm 和 bbl-lite）")
-parser.add_argument('--model_name', type=str, default="nash50", help="模型名称")
+parser.add_argument('--model_name', type=str, default="google/gemini-2.5-flash-nothinking", 
+                    help="模型名称，支持 gemini (google/gemini-2.5-flash-nothinking) 或 gpt-4o")
 parser.add_argument('--task_name', type=str, default="logical_deduction", help="BBL 任务名称")
 parser.add_argument('--task_subdir', type=str, default="five_objects", help="任务子目录（如 five_objects）")
 parser.add_argument('--task_file', type=str, default=None, help="直接指定 task.json 文件路径（可选）")
 parser.add_argument('--max_samples', type=int, default=None, help="最大测试样本数（None表示使用全部样本）")
+parser.add_argument('--max_tokens', type=int, default=600, help="最大生成 token 数")
 args = parser.parse_args()
 
-port = args.port
-model_type = args.model_type
-model_path = args.model_path
 model_name = args.model_name
 task_name = args.task_name
 task_subdir = args.task_subdir
@@ -35,22 +31,27 @@ task_file = args.task_file
 
 root_path = '/root/autodl-tmp'
 
-# 创建模型适配器
-model_adapter = create_model_adapter(
-    model_type=model_type,
-    model_name=model_name,
-    model_path=model_path,
-    port=port
-)
+# 创建 EnvPlayer（用于 API 调用）
+env_player = EnvPlayer(2, {'model_name': model_name}, max_tokens=args.max_tokens)
 
 def llm_output(text: str) -> str:
-    """通过模型适配器调用模型获取输出"""
-    return model_adapter.generate(
-        prompt=text,
-        max_tokens=600,
-        temperature=0.5,
-        use_chat_template=True
-    )
+    """通过 EnvPlayer 调用模型获取输出，失败时重试直到成功"""
+    retries = 0
+    while True:
+        try:
+            output = env_player.act(text, 0)
+            if output:  # 如果返回非空字符串，认为成功
+                return output
+            else:
+                retries += 1
+                wait_time = min(2 ** retries, 30)  # 指数退避，最多等待30秒
+                print(f"  API 返回空结果，{wait_time} 秒后重试 (第 {retries} 次)...")
+                time.sleep(wait_time)
+        except Exception as e:
+            retries += 1
+            wait_time = min(2 ** retries, 30)  # 指数退避，最多等待30秒
+            print(f"  API 调用失败: {e}，{wait_time} 秒后重试 (第 {retries} 次)...")
+            time.sleep(wait_time)
 
 def load_task_json(task_file_path: str) -> dict:
     """加载 task.json 文件"""
@@ -79,7 +80,7 @@ def reformat_prompt(example: dict, task_prefix: str = "") -> str:
         prompt += f"\n{chr(65 + i)}. {choice}"
     
     # 添加输出格式要求（参考 test_gsm8k.py）
-    prompt += "\n\nLet's think step by step and always output: <think> [Your thoughts] </think> <answer> </answer> with no extra text. Strictly follow this format. Max response length: 200 words (tokens)."
+    prompt += "\n\nLet's think step by step and always output: <think> [Your thoughts] </think> <answer> [your answer] </answer> with no extra text. Strictly follow this format. Max response length: 200 words (tokens)."
     
     return prompt
 
@@ -141,15 +142,9 @@ def test_bbl(task_data: dict, max_samples=None):
         # 格式化 prompt
         prompt = reformat_prompt(example, task_prefix)
         
-        # 调用 API 获取模型输出
-        try:
-            output = llm_output(prompt)
-            answers.append(output)
-        except Exception as e:
-            print(f"⚠️  样本 {i} API 调用失败: {e}")
-            answers.append("")
-            accs.append(None)
-            continue
+        # 调用 API 获取模型输出（llm_output 内部已处理重试，不会失败）
+        output = llm_output(prompt)
+        answers.append(output)
         
         # 提取答案（支持数字选项）
         extracted_choice = extract_answer(output, num_choices, choices_are_numeric)
@@ -193,7 +188,7 @@ if __name__ == '__main__':
     print(f"正在加载任务文件: {task_json_path}")
     
     if not os.path.exists(task_json_path):
-        print(f"❌ 错误: 任务文件不存在: {task_json_path}")
+        print(f"错误: 任务文件不存在: {task_json_path}")
         print("\n请确保:")
         print("1. BIG-bench 仓库已克隆到 /root/autodl-tmp/BIG-bench")
         print("2. 或使用 --task_file 参数指定 task.json 文件的完整路径")
@@ -204,12 +199,7 @@ if __name__ == '__main__':
     print(f"任务名称: {task_data.get('name', 'Unknown')}")
     print(f"任务描述: {task_data.get('description', 'N/A')[:100]}...")
     print(f"测试样本数: {len(task_data.get('examples', []))}")
-    print(f"模型类型: {model_type}")
-    if model_type in ['vllm', 'bbl-lite']:
-        print(f"vLLM 服务端口: {port}")
-        print(f"模型路径: {root_path}/{model_path}/{model_name}" if model_path else f"模型路径: {root_path}/{model_name}")
-    else:
-        print(f"模型名称: {model_name}")
+    print(f"模型名称: {model_name}")
     print("\n开始评测...")
     
     # 运行评测
@@ -254,4 +244,4 @@ if __name__ == '__main__':
     with open(output_file, 'w', encoding='utf-8') as f:
         json.dump(results, f, indent=2, ensure_ascii=False)
     
-    print(f"✅ 结果已保存到: {output_file}")
+    print(f"结果已保存到: {output_file}")

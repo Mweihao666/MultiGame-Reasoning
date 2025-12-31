@@ -8,36 +8,46 @@ from math_verify import parse, verify
 import os, logging
 import argparse
 import random
-from model_adapter import create_model_adapter
+import sys
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+from ragen.env.base import EnvPlayer
 
 root_path = '/root/autodl-tmp'  # '/data1/lvnuoyan' 
 batch_size = 16
 parser = argparse.ArgumentParser()
-parser.add_argument("--model_type", type=str, default='vllm', 
-                    choices=['deepseek', 'gemini', 'bbl-lite', 'vllm'],
-                    help="模型类型：deepseek, gemini, bbl-lite, vllm")
-parser.add_argument("--model_path", type=str, default="tictactoe")
-parser.add_argument("--model_name", type=str, default="game50")
-parser.add_argument("--port", type=str, default="2100", help="vLLM 服务端口（仅用于 vllm 和 bbl-lite 类型）")
+parser.add_argument("--model_name", type=str, default="google/gemini-2.5-flash-nothinking", 
+                    help="模型名称，支持 gemini (google/gemini-2.5-flash-nothinking) 或 gpt-4o")
 parser.add_argument("--max_samples", type=int, default=None, help="最大测试样本数（None表示使用全部样本）")
+parser.add_argument("--max_tokens", type=int, default=600, help="最大生成 token 数")
 args = parser.parse_args()
-model_type = args.model_type
-model_path = args.model_path
 model_name = args.model_name
-port = args.port
 time_str = time.strftime("%m-%d-%H-%M", time.localtime())
 
-# 创建模型适配器
-model_adapter = create_model_adapter(
-    model_type=model_type,
-    model_name=model_name,
-    model_path=model_path,
-    port=port
-)
+# 创建 EnvPlayer（用于 API 调用）
+env_player = EnvPlayer(2, {'model_name': model_name}, max_tokens=args.max_tokens)
+
+def llm_output(text: str) -> str:
+    """通过 EnvPlayer 调用模型获取输出，失败时重试直到成功"""
+    retries = 0
+    while True:
+        try:
+            output = env_player.act(text, 0)
+            if output:  # 如果返回非空字符串，认为成功
+                return output
+            else:
+                retries += 1
+                wait_time = min(2 ** retries, 30)  # 指数退避，最多等待30秒
+                print(f"  API 返回空结果，{wait_time} 秒后重试 (第 {retries} 次)...")
+                time.sleep(wait_time)
+        except Exception as e:
+            retries += 1
+            wait_time = min(2 ** retries, 30)  # 指数退避，最多等待30秒
+            print(f"  API 调用失败: {e}，{wait_time} 秒后重试 (第 {retries} 次)...")
+            time.sleep(wait_time)
 
 def load_llm():
-    """兼容性函数，返回 model_adapter 和 None（sampling_params 不再需要）"""
-    return model_adapter, None
+    """兼容性函数，返回 env_player 和 None（sampling_params 不再需要）"""
+    return env_player, None
 
 
 def reformat_prompt(prompt0):
@@ -65,7 +75,7 @@ def extract_solution(solution_str):
 
 
 def test_math(llm, sampling_params, math, max_samples=None):
-    """测试数学任务，使用 model_adapter 进行 API 调用"""
+    """测试数学任务，使用 EnvPlayer 进行 API 调用"""
     accs_strict = []
     accs_flex = []
     answers = []
@@ -75,27 +85,18 @@ def test_math(llm, sampling_params, math, max_samples=None):
         data = math['test'][i: i + batch_size]
         prompts = [reformat_prompt(data['prompt'][j][0]['content']) for j in range(len(data['prompt']))]
         
-        # 使用 model_adapter 逐个生成（API 调用不支持批量）
+        # 使用 EnvPlayer 逐个生成（API 调用不支持批量，llm_output 内部已处理重试）
         outputs = []
         for prompt in prompts:
-            try:
-                output_text = llm.generate(
-                    prompt=prompt,
-                    max_tokens=600,
-                    temperature=0.5,
-                    use_chat_template=True
-                )
-                # 包装成类似 vLLM 输出的格式，保持兼容性
-                class FakeOutput:
-                    def __init__(self, text):
-                        self.text = text
-                class FakeRequestOutput:
-                    def __init__(self, text):
-                        self.outputs = [FakeOutput(text)]
-                outputs.append(FakeRequestOutput(output_text))
-            except Exception as e:
-                print(f"⚠️  生成失败: {e}")
-                outputs.append(FakeRequestOutput(""))
+            output_text = llm_output(prompt)
+            # 包装成类似 vLLM 输出的格式，保持兼容性
+            class FakeOutput:
+                def __init__(self, text):
+                    self.text = text
+            class FakeRequestOutput:
+                def __init__(self, text):
+                    self.outputs = [FakeOutput(text)]
+            outputs.append(FakeRequestOutput(output_text))
         
         for j, out in enumerate(outputs):
             solu_strict, solu_flex = extract_solution(out.outputs[0].text)
