@@ -1,9 +1,9 @@
 #!/bin/bash
-ORI_FILE="mnt-comp1"
-TAR_FILE="mix"
-HF_PATH="/root/autodl-tmp/Qwen2.5-1.5B-Instruct"
+ORI_FILE="mnt-mix-7b"
+TAR_FILE="mntm"
+HF_PATH="/root/autodl-tmp/Qwen2.5-7B-Instruct"
 
-for i in {100..100..50}
+for i in {200..200..50}
 do
     ORI_PATH="/root/autodl-tmp/${ORI_FILE}/global_step_${i}/actor"
     TARGET_PATH="/root/autodl-tmp/${ORI_FILE}/${TAR_FILE}${i}"
