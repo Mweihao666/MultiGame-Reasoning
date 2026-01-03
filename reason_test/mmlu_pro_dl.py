@@ -24,10 +24,13 @@ parser.add_argument("--max_samples", type=int, default=None, help="最大测试�
 parser.add_argument("--max_tokens", type=int, default=600, help="最大生成 token 数")
 args = parser.parse_args()
 model_name = args.model_name
+# 如果模型名称是 gpt-4o，转换为 openai/gpt-4o（通过 openrouter 调用）
+if model_name == 'gpt-4o':
+    model_name = 'openai/gpt-4o'
 time_str = time.strftime("%m-%d-%H-%M", time.localtime())
 
 # 创建 EnvPlayer（用于 API 调用）
-env_player = EnvPlayer(2, {'model_name': model_name}, max_tokens=args.max_tokens)
+env_player = EnvPlayer(2, [{'model_name': model_name}], max_tokens=args.max_tokens)
 
 def llm_output(text: str) -> str:
     """通过 EnvPlayer 调用模型获取输出，失败时重试直到成功"""
